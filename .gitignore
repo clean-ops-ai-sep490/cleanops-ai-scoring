@@ -1,0 +1,35 @@
+# --- Data and Datasets ---
+data/
+yolo_dataset/
+unet_dataset/
+*.zip
+*.tar.gz
+
+# --- Outputs & Model Weights ---
+outputs/
+runs/
+*.pt
+!best.pt  # (Tùy chọn: Nếu bạn muốn push một file best.pt nhỏ lên git, bỏ comment dòng này)
+wandb/
+
+# --- Python & Environments ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints/
+
+# --- IDE & OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- API & Secrets ---
+.env
