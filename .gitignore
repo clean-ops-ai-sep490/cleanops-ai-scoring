@@ -9,8 +9,14 @@ unet_dataset/
 outputs/
 runs/
 *.pt
-!best.pt  # (Tùy chọn: Nếu bạn muốn push một file best.pt nhỏ lên git, bỏ comment dòng này)
+*.pth
+*.ckpt
+models/*.pt
+models/*.pth
+models/*.ckpt
 wandb/
+logs/
+*.log
 
 # --- Python & Environments ---
 .venv/
@@ -20,6 +26,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.pytest_cache/
+.mypy_cache/
 
 # --- Jupyter Notebooks ---
 .ipynb_checkpoints/
@@ -30,6 +38,21 @@ __pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+SilentlyContinue/
+ErrorAction/
+tmp/
+temp/
+*.tmp
 
 # --- API & Secrets ---
 .env
+.env.*
+!.env.example
+kaggle.json
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+credentials/

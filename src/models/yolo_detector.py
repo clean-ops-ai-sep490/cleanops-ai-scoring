@@ -16,7 +16,17 @@ class YoloDetector:
         boxes = results[0].boxes
         return len(boxes)
 
-    def train(self, data_yaml_path, epochs=50, batch_size=16, imgsz=640, project_dir="outputs/yolo"):
+    def train(
+        self,
+        data_yaml_path,
+        epochs=50,
+        batch_size=16,
+        imgsz=640,
+        project_dir="outputs/yolo",
+        run_name="trash_detection",
+        device="0",
+        half=True,
+    ):
         """
         Huấn luyện YOLOv8 trên tập dữ liệu Trash/Objects.
         (batch_size=16 dành cho RTX 3050).
@@ -27,7 +37,7 @@ class YoloDetector:
             batch=batch_size,
             imgsz=imgsz,
             project=project_dir,
-            name="trash_detection",
-            device=0, # GPU mặc định
-            half=True # Bật AMP để tiết kiệm VRAM
+            name=run_name,
+            device=device,
+            half=half,
         )
