@@ -98,13 +98,13 @@ REQUEST_TIMEOUT_SEC = settings.request_timeout_sec
 
 # Load model global để tái sử dụng
 try:
-    if MODEL_PATH and os.path.exists(MODEL_PATH):
+    if MODEL_PATH:
         model = YOLO(MODEL_PATH)
         print("✅ Load model thành công!")
         print(f"Model path: {MODEL_PATH}")
     else:
         model = None
-        print(f"⚠️ Không tìm thấy model best.pt trong {BASE_OUTPUT_DIR}")
+        print("⚠️ Không có cấu hình MODEL_PATH, YOLO model chưa sẵn sàng.")
 except Exception as e:
     model = None
     print(f"Lỗi khởi tạo model: {e}")

@@ -72,3 +72,65 @@ Thay vì ép 1 model làm 2 việc trái ngược nhau, kiến trúc này chạy
 
 **Logic tự động duyệt (Auto-Approve):**
 Nếu `abnormal_objects == 0` VÀ `dirt_coverage < 5%` => Điểm Quality Score > 90 => AUTO_APPROVE.
+
+---
+
+## Chay repo cleaning_ai_poc (Scoring API)
+
+### Cach 1: Chay local Python
+
+1. Tao moi truong va cai package
+
+```powershell
+cd e:\capstone\folder\cleaning_ai_poc
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+2. Chay API
+
+```powershell
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+```
+
+3. Kiem tra nhanh
+
+- Swagger: http://localhost:8000/docs
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/" -Method Get | ConvertTo-Json -Depth 20
+```
+
+### Cach 2: Chay bang Docker
+
+```powershell
+cd e:\capstone\folder\cleaning_ai_poc
+docker build -t cleaning-ai-poc .
+docker run --rm -p 8000:8000 -e YOLO_TRAIN_PROJECT_DIR=/app/outputs/yolo_training_4_4 -v "e:/capstone/folder/cleaning_ai_poc/outputs:/app/outputs:ro" cleaning-ai-poc
+```
+
+Luu y: can mount thu muc `outputs` de API co the doc model da train (`run_poc_*/weights/best.pt`).
+
+### Test endpoint evaluate-batch
+
+```powershell
+$form = @{
+  env = "LOBBY_CORRIDOR"
+  image_urls = "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1200&q=80"
+}
+Invoke-RestMethod -Uri "http://localhost:8000/evaluate-batch" -Method Post -Form $form | ConvertTo-Json -Depth 60
+```
+
+Ket qua hop le se co:
+
+- `summary.processed` > 0
+- `results[0].scoring`
+- `results[0].yolo`
+- `results[0].unet`
+
+---
+
+## Chay full stack qua repo backend
+
+Neu ban muon test full async flow submit/poll (API .NET + worker + queue), xem huong dan trong [cleanopsai-backend/README.md](../cleanopsai-backend/README.md).

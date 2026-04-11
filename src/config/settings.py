@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
@@ -83,6 +84,33 @@ def _find_latest_best_pt(base_dir: Path) -> Optional[str]:
         reverse=True,
     )
     return str(best_files[0]) if best_files else None
+
+
+def _find_latest_run_poc_best_pt(project_dir: Path) -> Optional[str]:
+    if not project_dir.exists() or not project_dir.is_dir():
+        return None
+
+    candidates = []
+    for run_dir in project_dir.iterdir():
+        if not run_dir.is_dir():
+            continue
+
+        match = re.fullmatch(r"run_poc_(\d+)", run_dir.name)
+        if not match:
+            continue
+
+        best_pt = run_dir / "weights" / "best.pt"
+        if not best_pt.is_file():
+            continue
+
+        run_index = int(match.group(1))
+        candidates.append((run_index, run_dir.stat().st_mtime, best_pt))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return str(candidates[0][2])
 
 
 def _build_env_rules() -> Dict[str, Dict[str, object]]:
@@ -190,7 +218,34 @@ def _build_settings() -> Settings:
 
     model_path_raw = os.getenv("MODEL_PATH")
     resolved_model_path = _resolve_path(model_path_raw)
-    model_path = str(resolved_model_path) if resolved_model_path else _find_latest_best_pt(base_output_dir)
+
+    model_path: Optional[str] = None
+    if resolved_model_path and resolved_model_path.is_file():
+        model_path = str(resolved_model_path)
+    else:
+        preferred_yolo_project_dir = _resolve_path(
+            os.getenv("YOLO_TRAIN_PROJECT_DIR"), PROJECT_ROOT / "outputs" / "yolo_training_4_4"
+        )
+        legacy_yolo_project_dir = _resolve_path(os.getenv("YOLO_PROJECT_DIR"), None)
+
+        search_roots = []
+        for candidate in [preferred_yolo_project_dir, legacy_yolo_project_dir, base_output_dir]:
+            if candidate is None:
+                continue
+            if candidate in search_roots:
+                continue
+            search_roots.append(candidate)
+
+        for root in search_roots:
+            model_path = _find_latest_run_poc_best_pt(root)
+            if model_path:
+                break
+
+        if not model_path:
+            model_path = _find_latest_best_pt(base_output_dir)
+
+    if not model_path:
+        model_path = os.getenv("YOLO_WEIGHTS_PATH", "yolov8n.pt")
 
     unet_model_path = _resolve_path(
         os.getenv("UNET_MODEL_PATH"), PROJECT_ROOT / "models" / "unet_multiclass_best.pth"
