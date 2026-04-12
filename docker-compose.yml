@@ -1,0 +1,15 @@
+services:
+  cleanops-ai-scoring-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - BASE_OUTPUT_DIR=${BASE_OUTPUT_DIR:-/app/outputs}
+      - YOLO_TRAIN_PROJECT_DIR=${YOLO_TRAIN_PROJECT_DIR:-/app/outputs/yolo_training_4_4}
+    volumes:
+      - ./outputs:/app/outputs:ro
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

@@ -105,12 +105,18 @@ Invoke-RestMethod -Uri "http://localhost:8000/" -Method Get | ConvertTo-Json -De
 ### Cach 2: Chay bang Docker
 
 ```powershell
-cd e:\capstone\folder\cleaning_ai_poc
-docker build -t cleaning-ai-poc .
-docker run --rm -p 8000:8000 -e YOLO_TRAIN_PROJECT_DIR=/app/outputs/yolo_training_4_4 -v "e:/capstone/folder/cleaning_ai_poc/outputs:/app/outputs:ro" cleaning-ai-poc
+cd e:\capstone\server-side\cleanops-ai-scoring
+docker compose up -d --build
+docker compose ps
 ```
 
 Luu y: can mount thu muc `outputs` de API co the doc model da train (`run_poc_*/weights/best.pt`).
+
+Dung lai:
+
+```powershell
+docker compose down
+```
 
 ### Test endpoint evaluate-batch
 
