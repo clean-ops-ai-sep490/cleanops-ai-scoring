@@ -50,10 +50,17 @@ python src/api/main.py
 - POST /predict-unet
 - POST /predict-unet-url
 - POST /evaluate-batch
+- POST /evaluate-visualize-json
+- POST /evaluate-url-visualize-json
+- POST /evaluate-visualize-link
+- POST /evaluate-url-visualize-link
+- GET /visualizations/{token}
 
 ### Test
 - POST /predict-url-visualize
 - POST /predict-unet-url-visualize
+- POST /evaluate-visualize
+- POST /evaluate-url-visualize
 
 ## 4) Cach su dung nhanh
 ### 4.1 Single image upload (YOLO)
@@ -155,3 +162,159 @@ Ket luan:
 - Trong /evaluate-batch, tranh gui hon 5 anh moi request.
 - URL loi, timeout, 404 se duoc skip item, request van tra 200 neu con item xu ly duoc.
 - Neu tat ca item deu loi, summary.processed co the bang 0.
+
+## 7) Visual QA endpoint (anh khoanh vung)
+
+Muc tieu:
+- Tra ve truc tiep anh JPEG da duoc ve khoanh vung de team/khach hang xem AI hoat dong dung hay sai.
+- Tren 1 anh se co:
+	- Bounding box tu YOLO
+	- Vung segmentation tu U-Net (stain/water, wet surface)
+	- Bang thong tin verdict + quality score + dirty coverage + detections
+
+### 7.1 Upload file
+Endpoint: POST /evaluate-visualize
+
+Form fields:
+- file: anh upload
+- env: tuy chon, mac dinh LOBBY_CORRIDOR
+
+PowerShell sample:
+```powershell
+$form = @{
+	env = "LOBBY_CORRIDOR"
+	file = Get-Item "E:/test-images/floor_01.jpg"
+}
+Invoke-WebRequest -Uri "http://localhost:8000/evaluate-visualize" -Method Post -Form $form -OutFile "E:/test-images/floor_01_qa.jpg"
+```
+
+### 7.2 URL image
+Endpoint: POST /evaluate-url-visualize
+
+Body JSON:
+```json
+{
+	"url": "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1200&q=80",
+	"env": "LOBBY_CORRIDOR"
+}
+```
+
+PowerShell sample:
+```powershell
+$payload = @{ 
+	url = "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1200&q=80"
+	env = "RESTROOM"
+} | ConvertTo-Json
+
+Invoke-WebRequest -Uri "http://localhost:8000/evaluate-url-visualize" -Method Post -ContentType "application/json" -Body $payload -OutFile "E:/test-images/url_qa.jpg"
+```
+
+### 7.3 JSON + Base64 cho frontend
+Muc tieu:
+- Frontend nhan mot JSON duy nhat va render anh truc tiep bang chuoi base64.
+- Khong can luu file tam tren server hay tren may client.
+
+Endpoint upload: POST /evaluate-visualize-json
+
+Response mau (rut gon):
+```json
+{
+	"source_type": "upload",
+	"source": "floor_01.jpg",
+	"env": "LOBBY_CORRIDOR",
+	"mime_type": "image/jpeg",
+	"encoding": "base64",
+	"image_base64": "...",
+	"scoring": {
+		"quality_score": 86.4,
+		"verdict": "PENDING"
+	},
+	"yolo": {
+		"detections_count": 2,
+		"results": []
+	},
+	"unet": {
+		"total_dirty_coverage_pct": 8.6
+	}
+}
+```
+
+Endpoint URL: POST /evaluate-url-visualize-json
+
+Body JSON:
+```json
+{
+	"url": "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1200&q=80",
+	"env": "LOBBY_CORRIDOR"
+}
+```
+
+PowerShell sample:
+```powershell
+$payload = @{ 
+	url = "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1200&q=80"
+	env = "RESTROOM"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/evaluate-url-visualize-json" -Method Post -ContentType "application/json" -Body $payload | ConvertTo-Json -Depth 20
+```
+
+### 7.4 Docker config lien quan
+- Bien moi truong moi: VISUALIZE_JPEG_QUALITY (20-100, mac dinh 92)
+- Gia tri cao hon => anh ro hon, payload base64 lon hon.
+
+Them bien cho temporary URL:
+- VISUALIZE_TEMP_URL_TTL_SEC: thoi gian song cua URL tam (giay), mac dinh 900.
+- VISUALIZE_TEMP_MAX_ITEMS: so anh overlay tam toi da luu trong memory, mac dinh 200.
+- APP_PUBLIC_BASE_URL: base URL public de tao link cho mobile app (vi du https://api-cleanops.example.com).
+
+## 8) Endpoint metadata + temporary URL (khuyen nghi cho mobile)
+
+Muc tieu:
+- Giam payload so voi base64.
+- Mobile app nhan metadata va 1 link anh tam de tai khi can.
+
+### 8.1 Upload file
+Endpoint: POST /evaluate-visualize-link
+
+Form fields:
+- file: anh upload
+- env: tuy chon, mac dinh LOBBY_CORRIDOR
+
+Response mau (rut gon):
+```json
+{
+	"source_type": "upload",
+	"source": "floor_01.jpg",
+	"env": "LOBBY_CORRIDOR",
+	"visualization": {
+		"token": "a1b2c3...",
+		"url": "http://localhost:8000/visualizations/a1b2c3...",
+		"mime_type": "image/jpeg",
+		"byte_size": 188232,
+		"ttl_seconds": 900,
+		"expires_at_utc": "2026-04-12T10:10:10.000Z"
+	},
+	"scoring": {},
+	"yolo": {},
+	"unet": {}
+}
+```
+
+### 8.2 URL image
+Endpoint: POST /evaluate-url-visualize-link
+
+Body JSON:
+```json
+{
+	"url": "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1200&q=80",
+	"env": "LOBBY_CORRIDOR"
+}
+```
+
+### 8.3 Lay anh tu temporary URL
+Endpoint: GET /visualizations/{token}
+
+Luu y:
+- Sau khi het TTL, endpoint nay tra 404.
+- Khong luu file tren o dia; chi luu tam trong memory cua service.

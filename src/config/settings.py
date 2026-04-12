@@ -176,6 +176,7 @@ class Settings:
     app_port: int
     app_reload: bool
     request_timeout_sec: int
+    app_public_base_url: str
 
     base_output_dir: Path
     model_path: Optional[str]
@@ -185,6 +186,9 @@ class Settings:
     yolo_conf: float
     max_batch_images: int
     pending_lower_bound: float
+    visualize_jpeg_quality: int
+    visualize_temp_url_ttl_sec: int
+    visualize_temp_max_items: int
 
     kaggle_dataset: str
     roboflow_api_key: Optional[str]
@@ -285,6 +289,7 @@ def _build_settings() -> Settings:
         app_port=_as_int("APP_PORT", 8000),
         app_reload=_as_bool("APP_RELOAD", True),
         request_timeout_sec=_as_int("REQUEST_TIMEOUT_SEC", 30),
+        app_public_base_url=os.getenv("APP_PUBLIC_BASE_URL", "").strip(),
         base_output_dir=base_output_dir,
         model_path=model_path,
         unet_model_path=str(unet_model_path),
@@ -292,6 +297,9 @@ def _build_settings() -> Settings:
         yolo_conf=_as_float("YOLO_CONF", 0.25),
         max_batch_images=_as_int("MAX_BATCH_IMAGES", 5),
         pending_lower_bound=_as_float("PENDING_LOWER_BOUND", 50.0),
+        visualize_jpeg_quality=_as_int("VISUALIZE_JPEG_QUALITY", 92),
+        visualize_temp_url_ttl_sec=_as_int("VISUALIZE_TEMP_URL_TTL_SEC", 900),
+        visualize_temp_max_items=_as_int("VISUALIZE_TEMP_MAX_ITEMS", 200),
         kaggle_dataset=os.getenv("KAGGLE_DATASET", "alyyan/trash-detection"),
         roboflow_api_key=os.getenv("ROBOFLOW_API_KEY"),
         roboflow_workspace=os.getenv("ROBOFLOW_WORKSPACE", "compvision-bfglv"),

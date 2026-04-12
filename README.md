@@ -110,13 +110,32 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Luu y: can mount thu muc `outputs` de API co the doc model da train (`run_poc_*/weights/best.pt`).
+Ban build self-contained image nen khong can mount `models` hay `outputs` de API len.
+Neu khong co model YOLO da train trong image, service se fallback sang `yolov8n.pt`.
 
 Dung lai:
 
 ```powershell
 docker compose down
 ```
+
+### Cach 3: Chay image da push len Docker Hub
+
+```powershell
+docker run --rm -p 8000:8000 <dockerhub-user>/cleanops-ai-scoring:<tag>
+```
+
+Kiem tra nhanh:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/" -Method Get | ConvertTo-Json -Depth 20
+```
+
+Ghi chu ve mount:
+
+- Mount la map thu muc tren may host vao container (vi du `-v E:/models:/app/models`).
+- Dung mount khi ban muon thay model ma khong can build lai image.
+- Neu chi muon ban be pull image tu Docker Hub va chay ngay, khong bat buoc mount.
 
 ### Test endpoint evaluate-batch
 
@@ -134,6 +153,72 @@ Ket qua hop le se co:
 - `results[0].scoring`
 - `results[0].yolo`
 - `results[0].unet`
+
+### Test endpoint visualize tong hop (YOLO + U-Net + verdict)
+
+Endpoint nay tra ve truc tiep file JPEG da ve khoanh vung, dung de QA nhanh model.
+
+```powershell
+$payload = @{ 
+  url = "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1200&q=80"
+  env = "LOBBY_CORRIDOR"
+} | ConvertTo-Json
+
+Invoke-WebRequest -Uri "http://localhost:8000/evaluate-url-visualize" -Method Post -ContentType "application/json" -Body $payload -OutFile "E:/temp/hybrid_overlay.jpg"
+```
+
+### Endpoint JSON + Base64 cho frontend
+
+Neu frontend can nhan truc tiep chuoi base64 de render len img tag, dung endpoint:
+
+- `POST /evaluate-visualize-json` (upload file)
+- `POST /evaluate-url-visualize-json` (URL image)
+
+Vi du URL:
+
+```powershell
+$payload = @{ 
+  url = "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1200&q=80"
+  env = "LOBBY_CORRIDOR"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/evaluate-url-visualize-json" -Method Post -ContentType "application/json" -Body $payload | ConvertTo-Json -Depth 20
+```
+
+Docker note:
+
+- Co the dieu chinh chat luong anh overlay qua env `VISUALIZE_JPEG_QUALITY` (20-100, default 92).
+- Sau khi sua code/env, can rebuild container:
+
+```powershell
+docker compose up -d --build
+```
+
+### Endpoint metadata + temporary URL (mobile-friendly)
+
+Neu muon giam payload hon base64, dung endpoint link tam:
+
+- `POST /evaluate-visualize-link` (upload file)
+- `POST /evaluate-url-visualize-link` (URL image)
+- `GET /visualizations/{token}` (lay anh overlay)
+
+Vi du URL:
+
+```powershell
+$payload = @{ 
+  url = "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1200&q=80"
+  env = "LOBBY_CORRIDOR"
+} | ConvertTo-Json
+
+$resp = Invoke-RestMethod -Uri "http://localhost:8000/evaluate-url-visualize-link" -Method Post -ContentType "application/json" -Body $payload
+$resp.visualization.url
+```
+
+Them env:
+
+- `VISUALIZE_TEMP_URL_TTL_SEC` (default 900)
+- `VISUALIZE_TEMP_MAX_ITEMS` (default 200)
+- `APP_PUBLIC_BASE_URL` (neu can tra link public domain thay vi localhost)
 
 ---
 

@@ -1,6 +1,7 @@
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile, Form, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.openapi.utils import get_openapi
+import base64
 import uvicorn
 from ultralytics import YOLO
 import io
@@ -12,6 +13,9 @@ from pydantic import BaseModel
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import logging
+import threading
+import uuid
+from datetime import datetime, timedelta, timezone
 import cv2
 import numpy as np
 import torch
@@ -95,6 +99,68 @@ MAX_BATCH_IMAGES = settings.max_batch_images
 PENDING_LOWER_BOUND = settings.pending_lower_bound
 YOLO_CONF = settings.yolo_conf
 REQUEST_TIMEOUT_SEC = settings.request_timeout_sec
+VISUALIZE_JPEG_QUALITY = max(20, min(100, settings.visualize_jpeg_quality))
+APP_PUBLIC_BASE_URL = settings.app_public_base_url
+VISUALIZE_TEMP_URL_TTL_SEC = max(30, settings.visualize_temp_url_ttl_sec)
+VISUALIZE_TEMP_MAX_ITEMS = max(50, settings.visualize_temp_max_items)
+
+
+class TempVisualizationStore:
+    def __init__(self, ttl_sec: int, max_items: int):
+        self._ttl_sec = ttl_sec
+        self._max_items = max_items
+        self._items: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.Lock()
+
+    def _prune_locked(self, now: datetime):
+        expired_keys = [k for k, v in self._items.items() if v["expires_at"] <= now]
+        for key in expired_keys:
+            self._items.pop(key, None)
+
+        overflow = len(self._items) - self._max_items
+        if overflow > 0:
+            sorted_keys = sorted(self._items.items(), key=lambda kv: kv[1]["expires_at"])
+            for key, _ in sorted_keys[:overflow]:
+                self._items.pop(key, None)
+
+    def save(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(seconds=self._ttl_sec)
+        token = uuid.uuid4().hex
+
+        with self._lock:
+            self._prune_locked(now)
+            self._items[token] = {
+                "image": image_bytes,
+                "mime_type": mime_type,
+                "expires_at": expires_at,
+            }
+
+        return {
+            "token": token,
+            "mime_type": mime_type,
+            "byte_size": len(image_bytes),
+            "ttl_seconds": self._ttl_sec,
+            "expires_at_utc": expires_at.isoformat().replace("+00:00", "Z"),
+        }
+
+    def get(self, token: str) -> Optional[Dict[str, Any]]:
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            self._prune_locked(now)
+            item = self._items.get(token)
+            if item is None:
+                return None
+            if item["expires_at"] <= now:
+                self._items.pop(token, None)
+                return None
+            return item
+
+
+temp_visual_store = TempVisualizationStore(
+    ttl_sec=VISUALIZE_TEMP_URL_TTL_SEC,
+    max_items=VISUALIZE_TEMP_MAX_ITEMS,
+)
 
 # Load model global để tái sử dụng
 try:
@@ -272,6 +338,16 @@ def score_image(total_dirty_coverage_pct: float, detections_count: int, env_key:
 
 
 def evaluate_image(img: Image.Image, env_key: str):
+    yolo_result, unet_result, score = evaluate_image_with_artifacts(img, env_key)
+
+    return {
+        "yolo": yolo_result,
+        "unet": unet_result["summary"],
+        "scoring": score,
+    }
+
+
+def evaluate_image_with_artifacts(img: Image.Image, env_key: str):
     yolo_result = yolo_predict_from_pil(img)
     unet_result = unet_predict_from_pil(img)
 
@@ -280,11 +356,172 @@ def evaluate_image(img: Image.Image, env_key: str):
         detections_count=yolo_result["detections_count"],
         env_key=env_key,
     )
+    return yolo_result, unet_result, score
 
+
+def render_hybrid_overlay(
+    rgb: np.ndarray,
+    pred_original_size: np.ndarray,
+    yolo_result: Dict[str, Any],
+    scoring: Dict[str, Any],
+    env_key: str,
+):
+    overlay = rgb.copy()
+
+    stain_region = pred_original_size == 1
+    overlay[stain_region] = (overlay[stain_region] * 0.5 + np.array([255, 80, 80]) * 0.5).astype(np.uint8)
+
+    wet_region = pred_original_size == 2
+    overlay[wet_region] = (overlay[wet_region] * 0.5 + np.array([80, 255, 255]) * 0.5).astype(np.uint8)
+
+    composed = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
+
+    stain_mask = (pred_original_size == 1).astype(np.uint8) * 255
+    wet_mask = (pred_original_size == 2).astype(np.uint8) * 255
+
+    stain_contours = cv2.findContours(stain_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    wet_contours = cv2.findContours(wet_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    stain_contours = stain_contours[0] if len(stain_contours) == 2 else stain_contours[1]
+    wet_contours = wet_contours[0] if len(wet_contours) == 2 else wet_contours[1]
+
+    cv2.drawContours(composed, stain_contours, -1, (30, 30, 220), 2)
+    cv2.drawContours(composed, wet_contours, -1, (220, 200, 30), 2)
+
+    for item in yolo_result.get("results", []):
+        x1, y1, x2, y2 = [int(v) for v in item.get("bbox", [0, 0, 0, 0])]
+        class_name = str(item.get("class_name", "obj"))
+        confidence = float(item.get("confidence", 0.0))
+        label = f"{class_name} {confidence:.2f}"
+
+        cv2.rectangle(composed, (x1, y1), (x2, y2), (60, 200, 20), 2)
+
+        (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+        text_top = max(0, y1 - text_h - 10)
+        cv2.rectangle(composed, (x1, text_top), (x1 + text_w + 8, text_top + text_h + 8), (60, 200, 20), -1)
+        cv2.putText(
+            composed,
+            label,
+            (x1 + 4, text_top + text_h + 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 0, 0),
+            2,
+            cv2.LINE_AA,
+        )
+
+    verdict = str(scoring.get("verdict", "UNKNOWN")).upper()
+    verdict_colors = {
+        "PASS": (60, 175, 60),
+        "PENDING": (0, 165, 255),
+        "FAIL": (40, 40, 220),
+    }
+    verdict_color = verdict_colors.get(verdict, (180, 180, 180))
+
+    panel_x1, panel_y1 = 12, 12
+    panel_x2, panel_y2 = 560, 192
+    cv2.rectangle(composed, (panel_x1, panel_y1), (panel_x2, panel_y2), (20, 20, 20), -1)
+    cv2.rectangle(composed, (panel_x1, panel_y1), (panel_x2, panel_y2), verdict_color, 2)
+
+    info_lines = [
+        f"ENV: {env_key}",
+        f"VERDICT: {verdict}",
+        f"QUALITY SCORE: {float(scoring.get('quality_score', 0.0)):.2f}",
+        f"DIRTY COVERAGE: {float(100.0 - float(scoring.get('base_clean_score', 0.0))):.2f}%",
+        f"YOLO DETECTIONS: {int(yolo_result.get('detections_count', 0))}",
+    ]
+
+    y_text = panel_y1 + 28
+    for idx, line in enumerate(info_lines):
+        color = (255, 255, 255) if idx != 1 else verdict_color
+        cv2.putText(
+            composed,
+            line,
+            (panel_x1 + 12, y_text),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+        y_text += 30
+
+    legend_y = panel_y2 + 28
+    cv2.rectangle(composed, (panel_x1, legend_y), (panel_x1 + 18, legend_y + 18), (30, 30, 220), -1)
+    cv2.putText(composed, "U-Net stain/water", (panel_x1 + 26, legend_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (30, 30, 30), 2, cv2.LINE_AA)
+
+    legend_y += 28
+    cv2.rectangle(composed, (panel_x1, legend_y), (panel_x1 + 18, legend_y + 18), (220, 200, 30), -1)
+    cv2.putText(composed, "U-Net wet surface", (panel_x1 + 26, legend_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (30, 30, 30), 2, cv2.LINE_AA)
+
+    legend_y += 28
+    cv2.rectangle(composed, (panel_x1, legend_y), (panel_x1 + 18, legend_y + 18), (60, 200, 20), -1)
+    cv2.putText(composed, "YOLO objects", (panel_x1 + 26, legend_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (30, 30, 30), 2, cv2.LINE_AA)
+
+    out_rgb = cv2.cvtColor(composed, cv2.COLOR_BGR2RGB)
+    out = Image.fromarray(out_rgb)
+    b = io.BytesIO()
+    out.save(b, format="JPEG", quality=VISUALIZE_JPEG_QUALITY)
+    b.seek(0)
+    return b.getvalue()
+
+
+def build_visualize_json_payload(
+    source_type: str,
+    source: str,
+    env_key: str,
+    yolo_result: Dict[str, Any],
+    unet_result: Dict[str, Any],
+    scoring: Dict[str, Any],
+    rendered: bytes,
+):
+    image_base64 = base64.b64encode(rendered).decode("ascii")
     return {
+        "source_type": source_type,
+        "source": source,
+        "env": env_key,
+        "mime_type": "image/jpeg",
+        "encoding": "base64",
+        "image_base64": image_base64,
+        "scoring": scoring,
         "yolo": yolo_result,
         "unet": unet_result["summary"],
-        "scoring": score,
+    }
+
+
+def build_temp_visualization_url(request: Request, token: str) -> str:
+    if APP_PUBLIC_BASE_URL:
+        return f"{APP_PUBLIC_BASE_URL.rstrip('/')}/visualizations/{token}"
+    return str(request.url_for("get_visualization_image", token=token))
+
+
+def build_visualize_temp_url_payload(
+    request: Request,
+    source_type: str,
+    source: str,
+    env_key: str,
+    yolo_result: Dict[str, Any],
+    unet_result: Dict[str, Any],
+    scoring: Dict[str, Any],
+    rendered: bytes,
+):
+    ticket = temp_visual_store.save(rendered, mime_type="image/jpeg")
+    visualization_url = build_temp_visualization_url(request, ticket["token"])
+
+    return {
+        "source_type": source_type,
+        "source": source,
+        "env": env_key,
+        "visualization": {
+            "token": ticket["token"],
+            "url": visualization_url,
+            "mime_type": ticket["mime_type"],
+            "byte_size": ticket["byte_size"],
+            "ttl_seconds": ticket["ttl_seconds"],
+            "expires_at_utc": ticket["expires_at_utc"],
+        },
+        "scoring": scoring,
+        "yolo": yolo_result,
+        "unet": unet_result["summary"],
     }
 
 
@@ -316,9 +553,25 @@ def health_check():
         "unet_model_path": UNET_MODEL_PATH,
         "max_batch_images": MAX_BATCH_IMAGES,
         "pending_lower_bound": PENDING_LOWER_BOUND,
+        "visualize_jpeg_quality": VISUALIZE_JPEG_QUALITY,
+        "visualize_temp_url_ttl_sec": VISUALIZE_TEMP_URL_TTL_SEC,
+        "visualize_temp_max_items": VISUALIZE_TEMP_MAX_ITEMS,
         "env_rules": ENV_RULES,
         "message": "Welcome to Cleaning AI Hybrid API (YOLO + U-Net)"
     }
+
+
+@app.get("/visualizations/{token}", tags=["production"])
+def get_visualization_image(token: str):
+    item = temp_visual_store.get(token)
+    if item is None:
+        return JSONResponse(status_code=404, content={"error": "Visualization not found or expired."})
+
+    return Response(
+        content=item["image"],
+        media_type=item["mime_type"],
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 @app.post("/predict", tags=["production"])
 async def predict_image(file: UploadFile = File(...)):
@@ -343,6 +596,11 @@ async def predict_image(file: UploadFile = File(...)):
 
 class ImageURL(BaseModel):
     url: str
+
+
+class EvaluateVisualizeRequest(BaseModel):
+    url: str
+    env: Optional[str] = "LOBBY_CORRIDOR"
 
 
 @app.post("/predict-unet", tags=["production"])
@@ -590,6 +848,266 @@ async def predict_image_url_visualize(payload: ImageURL):
         # Trả trực tiếp file ảnh .jpeg ra trình duyệt / màn hình UI
         return Response(content=img_byte_arr.getvalue(), media_type="image/jpeg")
         
+    except requests.exceptions.RequestException as e:
+        return JSONResponse(status_code=400, content={"error": f"Không thể tải ảnh từ URL: {str(e)}"})
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/evaluate-visualize", tags=["test"])
+async def evaluate_visualize(
+    file: UploadFile = File(...),
+    env: str = Form(default="LOBBY_CORRIDOR"),
+):
+    """
+    Tra ve anh da khoanh vung tong hop:
+    - Bounding boxes tu YOLO
+    - Mask/contour tu U-Net
+    - Verdict + score tren anh
+    """
+    if not model:
+        return JSONResponse(status_code=500, content={"error": "YOLO model chưa được tải."})
+    if not unet_model:
+        return JSONResponse(status_code=500, content={"error": "U-Net model chưa được tải."})
+
+    try:
+        env_key = normalize_env(env)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+    try:
+        content = await file.read()
+        if not content:
+            return JSONResponse(status_code=400, content={"error": "File ảnh rỗng."})
+
+        img = Image.open(io.BytesIO(content)).convert("RGB")
+        yolo_result, unet_result, scoring = evaluate_image_with_artifacts(img, env_key)
+        rendered = render_hybrid_overlay(
+            rgb=unet_result["rgb"],
+            pred_original_size=unet_result["mask_original_size"],
+            yolo_result=yolo_result,
+            scoring=scoring,
+            env_key=env_key,
+        )
+        return Response(content=rendered, media_type="image/jpeg")
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/evaluate-url-visualize", tags=["test"])
+async def evaluate_url_visualize(payload: EvaluateVisualizeRequest):
+    """
+    Giong /evaluate-visualize nhung nhan URL anh thay vi file upload.
+    """
+    if not model:
+        return JSONResponse(status_code=500, content={"error": "YOLO model chưa được tải."})
+    if not unet_model:
+        return JSONResponse(status_code=500, content={"error": "U-Net model chưa được tải."})
+
+    try:
+        env_key = normalize_env(payload.env)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+    try:
+        response = requests.get(payload.url, timeout=REQUEST_TIMEOUT_SEC)
+        response.raise_for_status()
+        img = Image.open(io.BytesIO(response.content)).convert("RGB")
+
+        yolo_result, unet_result, scoring = evaluate_image_with_artifacts(img, env_key)
+        rendered = render_hybrid_overlay(
+            rgb=unet_result["rgb"],
+            pred_original_size=unet_result["mask_original_size"],
+            yolo_result=yolo_result,
+            scoring=scoring,
+            env_key=env_key,
+        )
+        return Response(content=rendered, media_type="image/jpeg")
+    except requests.exceptions.RequestException as e:
+        return JSONResponse(status_code=400, content={"error": f"Không thể tải ảnh từ URL: {str(e)}"})
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/evaluate-visualize-json", tags=["production"])
+async def evaluate_visualize_json(
+    file: UploadFile = File(...),
+    env: str = Form(default="LOBBY_CORRIDOR"),
+):
+    """
+    Tra ve JSON gom ket qua danh gia va anh overlay dang base64,
+    phu hop de frontend render truc tiep khong can luu file tam.
+    """
+    if not model:
+        return JSONResponse(status_code=500, content={"error": "YOLO model chưa được tải."})
+    if not unet_model:
+        return JSONResponse(status_code=500, content={"error": "U-Net model chưa được tải."})
+
+    try:
+        env_key = normalize_env(env)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+    try:
+        content = await file.read()
+        if not content:
+            return JSONResponse(status_code=400, content={"error": "File ảnh rỗng."})
+
+        img = Image.open(io.BytesIO(content)).convert("RGB")
+        yolo_result, unet_result, scoring = evaluate_image_with_artifacts(img, env_key)
+        rendered = render_hybrid_overlay(
+            rgb=unet_result["rgb"],
+            pred_original_size=unet_result["mask_original_size"],
+            yolo_result=yolo_result,
+            scoring=scoring,
+            env_key=env_key,
+        )
+
+        return build_visualize_json_payload(
+            source_type="upload",
+            source=file.filename or "upload",
+            env_key=env_key,
+            yolo_result=yolo_result,
+            unet_result=unet_result,
+            scoring=scoring,
+            rendered=rendered,
+        )
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/evaluate-url-visualize-json", tags=["production"])
+async def evaluate_url_visualize_json(payload: EvaluateVisualizeRequest):
+    """
+    Tuong tu /evaluate-visualize-json nhung nhan URL anh.
+    """
+    if not model:
+        return JSONResponse(status_code=500, content={"error": "YOLO model chưa được tải."})
+    if not unet_model:
+        return JSONResponse(status_code=500, content={"error": "U-Net model chưa được tải."})
+
+    try:
+        env_key = normalize_env(payload.env)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+    try:
+        response = requests.get(payload.url, timeout=REQUEST_TIMEOUT_SEC)
+        response.raise_for_status()
+        img = Image.open(io.BytesIO(response.content)).convert("RGB")
+
+        yolo_result, unet_result, scoring = evaluate_image_with_artifacts(img, env_key)
+        rendered = render_hybrid_overlay(
+            rgb=unet_result["rgb"],
+            pred_original_size=unet_result["mask_original_size"],
+            yolo_result=yolo_result,
+            scoring=scoring,
+            env_key=env_key,
+        )
+
+        return build_visualize_json_payload(
+            source_type="url",
+            source=payload.url,
+            env_key=env_key,
+            yolo_result=yolo_result,
+            unet_result=unet_result,
+            scoring=scoring,
+            rendered=rendered,
+        )
+    except requests.exceptions.RequestException as e:
+        return JSONResponse(status_code=400, content={"error": f"Không thể tải ảnh từ URL: {str(e)}"})
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/evaluate-visualize-link", tags=["production"])
+async def evaluate_visualize_link(
+    request: Request,
+    file: UploadFile = File(...),
+    env: str = Form(default="LOBBY_CORRIDOR"),
+):
+    """
+    Tra ve metadata + temporary URL cua anh overlay,
+    phu hop mobile app de giam payload thay vi base64.
+    """
+    if not model:
+        return JSONResponse(status_code=500, content={"error": "YOLO model chưa được tải."})
+    if not unet_model:
+        return JSONResponse(status_code=500, content={"error": "U-Net model chưa được tải."})
+
+    try:
+        env_key = normalize_env(env)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+    try:
+        content = await file.read()
+        if not content:
+            return JSONResponse(status_code=400, content={"error": "File ảnh rỗng."})
+
+        img = Image.open(io.BytesIO(content)).convert("RGB")
+        yolo_result, unet_result, scoring = evaluate_image_with_artifacts(img, env_key)
+        rendered = render_hybrid_overlay(
+            rgb=unet_result["rgb"],
+            pred_original_size=unet_result["mask_original_size"],
+            yolo_result=yolo_result,
+            scoring=scoring,
+            env_key=env_key,
+        )
+
+        return build_visualize_temp_url_payload(
+            request=request,
+            source_type="upload",
+            source=file.filename or "upload",
+            env_key=env_key,
+            yolo_result=yolo_result,
+            unet_result=unet_result,
+            scoring=scoring,
+            rendered=rendered,
+        )
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/evaluate-url-visualize-link", tags=["production"])
+async def evaluate_url_visualize_link(request: Request, payload: EvaluateVisualizeRequest):
+    """
+    Tuong tu /evaluate-visualize-link nhung nhan URL anh.
+    """
+    if not model:
+        return JSONResponse(status_code=500, content={"error": "YOLO model chưa được tải."})
+    if not unet_model:
+        return JSONResponse(status_code=500, content={"error": "U-Net model chưa được tải."})
+
+    try:
+        env_key = normalize_env(payload.env)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+    try:
+        response = requests.get(payload.url, timeout=REQUEST_TIMEOUT_SEC)
+        response.raise_for_status()
+        img = Image.open(io.BytesIO(response.content)).convert("RGB")
+
+        yolo_result, unet_result, scoring = evaluate_image_with_artifacts(img, env_key)
+        rendered = render_hybrid_overlay(
+            rgb=unet_result["rgb"],
+            pred_original_size=unet_result["mask_original_size"],
+            yolo_result=yolo_result,
+            scoring=scoring,
+            env_key=env_key,
+        )
+
+        return build_visualize_temp_url_payload(
+            request=request,
+            source_type="url",
+            source=payload.url,
+            env_key=env_key,
+            yolo_result=yolo_result,
+            unet_result=unet_result,
+            scoring=scoring,
+            rendered=rendered,
+        )
     except requests.exceptions.RequestException as e:
         return JSONResponse(status_code=400, content={"error": f"Không thể tải ảnh từ URL: {str(e)}"})
     except Exception as e:

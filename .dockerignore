@@ -1,0 +1,28 @@
+.git/
+.gitignore
+.vscode/
+.idea/
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Large local artifacts not needed for runtime image
+outputs/
+notebooks/
+data/
+yolo_dataset/
+unet_dataset/
+
+# Local secrets and docs not needed for image build
+.env
+.env.*
+!.env.example
+*.ipynb
+PROGRESS_SUMMARY.md
+STATUS_UPDATE.md
+API_USAGE_AND_SCORING.md
+README.md
