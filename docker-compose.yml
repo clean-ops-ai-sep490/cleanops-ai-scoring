@@ -22,6 +22,23 @@ services:
       - VISUALIZE_TEMP_URL_TTL_SEC=${VISUALIZE_TEMP_URL_TTL_SEC:-900}
       - VISUALIZE_TEMP_MAX_ITEMS=${VISUALIZE_TEMP_MAX_ITEMS:-200}
       - APP_PUBLIC_BASE_URL=${APP_PUBLIC_BASE_URL:-http://localhost:8000}
+      - RETRAIN_API_ENABLED=${RETRAIN_API_ENABLED:-true}
+      - RETRAIN_API_KEY=${RETRAIN_API_KEY:-}
+      - RETRAIN_USE_REMOTE_TRAINER=${RETRAIN_USE_REMOTE_TRAINER:-true}
+      - RETRAIN_TRAINER_BASE_URL=${RETRAIN_TRAINER_BASE_URL:-http://cleanops-ai-scoring-trainer:8001}
+      - RETRAIN_TRAINER_SUBMIT_PATH=${RETRAIN_TRAINER_SUBMIT_PATH:-/trainer/jobs}
+      - RETRAIN_TRAINER_API_KEY=${RETRAIN_TRAINER_API_KEY:-}
+      - RETRAIN_TRAINER_TIMEOUT_SEC=${RETRAIN_TRAINER_TIMEOUT_SEC:-7200}
+      - RETRAIN_COMMAND=${RETRAIN_COMMAND:-}
+      - RETRAIN_COMMAND_TIMEOUT_SEC=${RETRAIN_COMMAND_TIMEOUT_SEC:-7200}
+      - RETRAIN_WORKDIR=${RETRAIN_WORKDIR:-/app}
+      - RETRAIN_STORAGE_CONNECTION_STRING=${RETRAIN_STORAGE_CONNECTION_STRING:-}
+      - RETRAIN_CONTAINER=${RETRAIN_CONTAINER:-retrain}
+      - RETRAIN_EXTERNAL_PREFIX=${RETRAIN_EXTERNAL_PREFIX:-scoring/external/latest}
+      - RETRAIN_CANDIDATE_YOLO_FILE=${RETRAIN_CANDIDATE_YOLO_FILE:-outputs/retrain/candidate/yolo_best.pt}
+      - RETRAIN_CANDIDATE_UNET_FILE=${RETRAIN_CANDIDATE_UNET_FILE:-outputs/retrain/candidate/unet_best.pth}
+      - RETRAIN_CANDIDATE_METRICS_FILE=${RETRAIN_CANDIDATE_METRICS_FILE:-outputs/retrain/candidate_metrics.json}
+      - RETRAIN_ALLOW_EXISTING_BLOB_CANDIDATE=${RETRAIN_ALLOW_EXISTING_BLOB_CANDIDATE:-true}
     ports:
       - "8000:8000"
     volumes:
@@ -42,12 +59,18 @@ services:
     environment:
       - BASE_OUTPUT_DIR=${BASE_OUTPUT_DIR:-/app/outputs}
       - YOLO_TRAIN_PROJECT_DIR=${YOLO_TRAIN_PROJECT_DIR:-/app/outputs/yolo_training_4_4}
+      - TRAINER_API_ENABLED=${TRAINER_API_ENABLED:-true}
+      - TRAINER_API_KEY=${RETRAIN_TRAINER_API_KEY:-}
+      - TRAINER_COMMAND=${SCORING_TRAIN_COMMAND:-python src/train_yolo.py}
+      - TRAINER_TIMEOUT_SEC=${TRAINER_TIMEOUT_SEC:-7200}
+      - TRAINER_WORKDIR=${TRAINER_WORKDIR:-/app}
     volumes:
       - cleanopsai-scoring-outputs:/app/outputs
       - ./data:/app/data
       - ./models:/app/models
       - ./unet_dataset:/app/unet_dataset
-    command: ${SCORING_TRAIN_COMMAND:-python src/train_yolo.py}
+    expose:
+      - "8001"
     restart: "no"
 
 volumes:

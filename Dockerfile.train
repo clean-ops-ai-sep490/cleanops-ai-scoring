@@ -17,4 +17,6 @@ COPY src ./src
 COPY scripts ./scripts
 RUN mkdir -p /app/outputs /app/data /app/models /app/unet_dataset
 
-CMD ["python", "src/train_yolo.py"]
+EXPOSE 8001
+
+CMD ["uvicorn", "src.trainer_api:app", "--host", "0.0.0.0", "--port", "8001"]

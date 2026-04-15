@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Form, Request
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse, Response
 import uvicorn
 from ultralytics import YOLO
@@ -25,17 +25,18 @@ from src.api.inference_utils import (
     yolo_predict_from_pil as yolo_predict_from_pil_impl,
 )
 from src.api.openapi_utils import apply_custom_openapi
+from src.api.retrain_api import retrain_router
 from src.api.schemas import EvaluateVisualizeRequest, ImageURL
 from src.api.scoring_utils import normalize_env as normalize_env_impl
 from src.api.scoring_utils import parse_url_items as parse_url_items_impl
-from src.api.temp_store import TempVisualizationStore
 from src.api.visualization_utils import (
+    build_visualize_blob_url_payload as build_visualize_blob_url_payload_impl,
     build_visualize_json_payload as build_visualize_json_payload_impl,
-    build_visualize_temp_url_payload as build_visualize_temp_url_payload_impl,
     render_hybrid_overlay as render_hybrid_overlay_impl,
     render_unet_overlay as render_unet_overlay_impl,
 )
 from src.storage.model_loader import ObjectStorageConfig, ObjectStorageModelLoader
+from src.storage.visualization_blob_store import VisualizationBlobConfig, VisualizationBlobStore
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ app = FastAPI(
     ],
 )
 apply_custom_openapi(app)
+app.include_router(retrain_router)
 
 PROJECT_ROOT = settings.project_root
 BASE_OUTPUT_DIR = str(settings.base_output_dir)
@@ -88,14 +90,19 @@ MODEL_STORAGE = ObjectStorageConfig(
 MODEL_LOADER = ObjectStorageModelLoader(MODEL_STORAGE, logger)
 MODEL_REQUIRE_BLOB = settings.model_require_blob
 
+VISUALIZATION_BLOB_STORE = VisualizationBlobStore(
+    VisualizationBlobConfig(
+        enabled=settings.visualization_blob_enabled,
+        connection_string=settings.visualization_blob_connection_string,
+        container=settings.visualization_blob_container,
+        prefix=settings.visualization_blob_prefix,
+    ),
+    logger,
+)
+
 YOLO_MODEL_SOURCE = "unknown"
 UNET_MODEL_SOURCE = "unknown"
 
-
-temp_visual_store = TempVisualizationStore(
-    ttl_sec=VISUALIZE_TEMP_URL_TTL_SEC,
-    max_items=VISUALIZE_TEMP_MAX_ITEMS,
-)
 
 # Load model global để tái sử dụng
 try:
@@ -257,8 +264,7 @@ def build_visualize_json_payload(
     )
 
 
-def build_visualize_temp_url_payload(
-    request: Request,
+def build_visualize_blob_payload(
     source_type: str,
     source: str,
     env_key: str,
@@ -267,17 +273,23 @@ def build_visualize_temp_url_payload(
     scoring: Dict[str, Any],
     rendered: bytes,
 ):
-    return build_visualize_temp_url_payload_impl(
-        request=request,
+    upload_info = VISUALIZATION_BLOB_STORE.upload_visualization(
+        image_bytes=rendered,
+        source_type=source_type,
+        source=source,
+        env_key=env_key,
+    )
+
+    return build_visualize_blob_url_payload_impl(
         source_type=source_type,
         source=source,
         env_key=env_key,
         yolo_result=yolo_result,
         unet_result=unet_result,
         scoring=scoring,
-        rendered=rendered,
-        temp_visual_store=temp_visual_store,
-        app_public_base_url=APP_PUBLIC_BASE_URL,
+        visualization_url=upload_info["url"],
+        mime_type=upload_info["mime_type"],
+        byte_size=upload_info["byte_size"],
     )
 
 @app.get("/", tags=["production"])
@@ -298,22 +310,12 @@ def health_check():
         "visualize_jpeg_quality": VISUALIZE_JPEG_QUALITY,
         "visualize_temp_url_ttl_sec": VISUALIZE_TEMP_URL_TTL_SEC,
         "visualize_temp_max_items": VISUALIZE_TEMP_MAX_ITEMS,
+        "visualization_blob_enabled": settings.visualization_blob_enabled,
+        "visualization_blob_container": settings.visualization_blob_container,
+        "visualization_blob_prefix": settings.visualization_blob_prefix,
         "env_rules": ENV_RULES,
         "message": "Welcome to Cleaning AI Hybrid API (YOLO + U-Net)"
     }
-
-
-@app.get("/visualizations/{token}", tags=["production"])
-def get_visualization_image(token: str):
-    item = temp_visual_store.get(token)
-    if item is None:
-        return JSONResponse(status_code=404, content={"error": "Visualization not found or expired."})
-
-    return Response(
-        content=item["image"],
-        media_type=item["mime_type"],
-        headers={"Cache-Control": "no-store, max-age=0"},
-    )
 
 @app.post("/predict", tags=["production"])
 async def predict_image(file: UploadFile = File(...)):
@@ -755,13 +757,12 @@ async def evaluate_url_visualize_json(payload: EvaluateVisualizeRequest):
 
 @app.post("/evaluate-visualize-link", tags=["production"])
 async def evaluate_visualize_link(
-    request: Request,
     file: UploadFile = File(...),
     env: str = Form(default="LOBBY_CORRIDOR"),
 ):
     """
-    Tra ve metadata + temporary URL cua anh overlay,
-    phu hop mobile app de giam payload thay vi base64.
+    Tra ve metadata + public blob URL cua anh overlay,
+    phu hop frontend/mobile de xem anh detect truc tiep.
     """
     if not model:
         return JSONResponse(status_code=500, content={"error": "YOLO model chưa được tải."})
@@ -788,8 +789,7 @@ async def evaluate_visualize_link(
             env_key=env_key,
         )
 
-        return build_visualize_temp_url_payload(
-            request=request,
+        return build_visualize_blob_payload(
             source_type="upload",
             source=file.filename or "upload",
             env_key=env_key,
@@ -803,9 +803,10 @@ async def evaluate_visualize_link(
 
 
 @app.post("/evaluate-url-visualize-link", tags=["production"])
-async def evaluate_url_visualize_link(request: Request, payload: EvaluateVisualizeRequest):
+async def evaluate_url_visualize_link(payload: EvaluateVisualizeRequest):
     """
-    Tuong tu /evaluate-visualize-link nhung nhan URL anh.
+    Tuong tu /evaluate-visualize-link nhung nhan URL anh,
+    ket qua visualization la blob URL public.
     """
     if not model:
         return JSONResponse(status_code=500, content={"error": "YOLO model chưa được tải."})
@@ -831,8 +832,7 @@ async def evaluate_url_visualize_link(request: Request, payload: EvaluateVisuali
             env_key=env_key,
         )
 
-        return build_visualize_temp_url_payload(
-            request=request,
+        return build_visualize_blob_payload(
             source_type="url",
             source=payload.url,
             env_key=env_key,

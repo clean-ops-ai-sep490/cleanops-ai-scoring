@@ -88,14 +88,14 @@ Nếu `abnormal_objects == 0` VÀ `dirt_coverage < 5%` => Điểm Quality Score 
 
 ---
 
-## Chay repo cleaning_ai_poc (Scoring API)
+## Chay cleanops-ai-scoring (Scoring API)
 
 ### Cach 1: Chay local Python
 
 1. Tao moi truong va cai package
 
 ```powershell
-cd e:\capstone\folder\cleaning_ai_poc
+cd e:\capstone\server-side\cleanops-ai-scoring
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
@@ -123,7 +123,37 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Mac dinh service API build voi `requirements.inference.txt` de giam footprint runtime.
+Mac dinh service API build voi `requirements.inference.txt` de giam footprint runtime, trainer duoc tach rieng qua `Dockerfile.train`.
+
+### Strict mode (blob-first, fail-fast)
+
+De bat stricter runtime policy cho API (require blob active model) voi 1 compose file duy nhat:
+
+```powershell
+$env:APP_RELOAD="false"
+$env:MODEL_STORAGE_ENABLED="true"
+$env:MODEL_REQUIRE_BLOB="true"
+$env:MODEL_FORCE_REFRESH="false"
+docker compose up -d --build
+docker compose ps
+```
+
+Sau khi test xong, neu can quay ve dev mode:
+
+```powershell
+Remove-Item Env:APP_RELOAD -ErrorAction SilentlyContinue
+Remove-Item Env:MODEL_STORAGE_ENABLED -ErrorAction SilentlyContinue
+Remove-Item Env:MODEL_REQUIRE_BLOB -ErrorAction SilentlyContinue
+Remove-Item Env:MODEL_FORCE_REFRESH -ErrorAction SilentlyContinue
+```
+
+### Security checklist truoc khi push/chay shared env
+
+- Khong commit connection string that vao git.
+- Dat secret qua .env local (khong commit) hoac secret manager cua CI/cloud.
+- Neu secret tung lo, rotate ngay va scrub lich su git.
+- Khong de APP_RELOAD=true khi chay production.
+- Kiem tra startup logs de chac chan khong dump thong tin nhay cam.
 
 Neu can build image day du phuc vu train trong cung Dockerfile chinh:
 
@@ -132,7 +162,7 @@ $env:SCORING_REQUIREMENTS_FILE="requirements.training.txt"
 docker compose build cleanops-ai-scoring-api
 ```
 
-Trainer image da duoc tach rieng (`Dockerfile.train`) va chay theo profile `trainer`:
+Trainer image chay theo profile `trainer`:
 
 ```powershell
 docker compose --profile trainer run --rm cleanops-ai-scoring-trainer
@@ -171,8 +201,37 @@ $env:SCORING_TRAIN_COMMAND="python src/train_unet.py --epochs 30"
 docker compose --profile trainer run --rm cleanops-ai-scoring-trainer
 ```
 
-Ban build self-contained image nen khong can mount `models` hay `outputs` de API len.
-Neu khong co model YOLO da train trong image, service se fallback sang `yolov8n.pt`.
+## Retrain API (Remote Trigger)
+
+Scoring API da co them endpoint retrain de backend poll theo job:
+
+- POST /retrain/jobs
+- GET /retrain/jobs/{jobId}
+
+Bien moi truong lien quan trong service `cleanops-ai-scoring-api`:
+
+- RETRAIN_API_ENABLED=true
+- RETRAIN_API_KEY= (optional, backend gui qua header X-Retrain-Api-Key)
+- RETRAIN_USE_REMOTE_TRAINER=true
+- RETRAIN_TRAINER_BASE_URL=http://cleanops-ai-scoring-trainer:8001
+- RETRAIN_TRAINER_SUBMIT_PATH=/trainer/jobs
+- RETRAIN_TRAINER_API_KEY= (optional, API gui qua header X-Trainer-Api-Key)
+- RETRAIN_TRAINER_TIMEOUT_SEC=7200
+- RETRAIN_COMMAND= (legacy fallback, optional shell command khi khong dung trainer service)
+- RETRAIN_COMMAND_TIMEOUT_SEC=7200
+- RETRAIN_STORAGE_CONNECTION_STRING= (hoac dung MODEL_STORAGE_CONNECTION_STRING)
+- RETRAIN_CONTAINER=retrain
+- RETRAIN_EXTERNAL_PREFIX=scoring/external/latest
+- RETRAIN_CANDIDATE_YOLO_FILE=outputs/retrain/candidate/yolo_best.pt
+- RETRAIN_CANDIDATE_UNET_FILE=outputs/retrain/candidate/unet_best.pth
+- RETRAIN_CANDIDATE_METRICS_FILE=outputs/retrain/candidate_metrics.json
+
+Luu y:
+
+- Mac dinh compose da bat RETRAIN_USE_REMOTE_TRAINER=true, retrain se duoc goi qua service `cleanops-ai-scoring-trainer`.
+- Service trainer chay command train qua bien TRAINER_COMMAND (mac dinh: `python src/train_yolo.py`).
+- Neu tat RETRAIN_USE_REMOTE_TRAINER va RETRAIN_COMMAND de trong, API se fallback candidate da co san tren Blob (neu RETRAIN_ALLOW_EXISTING_BLOB_CANDIDATE=true).
+- De backend promote duoc, can dam bao candidate artifacts ton tai tai prefix `scoring/external/latest` (hoac prefix ban da set).
 
 ## Model Storage (Azure Blob)
 
@@ -426,13 +485,12 @@ Docker note:
 docker compose up -d --build
 ```
 
-### Endpoint metadata + temporary URL (mobile-friendly)
+### Endpoint metadata + blob URL (mobile-friendly)
 
-Neu muon giam payload hon base64, dung endpoint link tam:
+Neu muon giam payload hon base64, dung endpoint tra ve link blob public:
 
 - `POST /evaluate-visualize-link` (upload file)
 - `POST /evaluate-url-visualize-link` (URL image)
-- `GET /visualizations/{token}` (lay anh overlay)
 
 Vi du URL:
 
@@ -448,9 +506,15 @@ $resp.visualization.url
 
 Them env:
 
-- `VISUALIZE_TEMP_URL_TTL_SEC` (default 900)
-- `VISUALIZE_TEMP_MAX_ITEMS` (default 200)
-- `APP_PUBLIC_BASE_URL` (neu can tra link public domain thay vi localhost)
+- `VISUALIZATION_BLOB_ENABLED=true`
+- `VISUALIZATION_BLOB_CONNECTION_STRING` (fallback sang `MODEL_STORAGE_CONNECTION_STRING` neu de trong)
+- `VISUALIZATION_BLOB_CONTAINER=visualizations`
+- `VISUALIZATION_BLOB_PREFIX=scoring/visualizations`
+
+Luu y:
+
+- Link duoc tra ve la public blob URL, frontend/mobile co the mo truc tiep.
+- Backend polling `GET /api/scoring/jobs/{jobId}` se expose link nay qua field `visualizationBlobUrl`.
 
 ---
 

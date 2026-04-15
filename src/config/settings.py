@@ -197,6 +197,10 @@ class Settings:
     visualize_jpeg_quality: int
     visualize_temp_url_ttl_sec: int
     visualize_temp_max_items: int
+    visualization_blob_enabled: bool
+    visualization_blob_connection_string: str
+    visualization_blob_container: str
+    visualization_blob_prefix: str
 
     kaggle_dataset: str
     roboflow_api_key: Optional[str]
@@ -319,6 +323,14 @@ def _build_settings() -> Settings:
         visualize_jpeg_quality=_as_int("VISUALIZE_JPEG_QUALITY", 92),
         visualize_temp_url_ttl_sec=_as_int("VISUALIZE_TEMP_URL_TTL_SEC", 900),
         visualize_temp_max_items=_as_int("VISUALIZE_TEMP_MAX_ITEMS", 200),
+        visualization_blob_enabled=_as_bool("VISUALIZATION_BLOB_ENABLED", True),
+        visualization_blob_connection_string=(
+            os.getenv("VISUALIZATION_BLOB_CONNECTION_STRING")
+            or os.getenv("MODEL_STORAGE_CONNECTION_STRING")
+            or ""
+        ),
+        visualization_blob_container=os.getenv("VISUALIZATION_BLOB_CONTAINER", "visualizations"),
+        visualization_blob_prefix=os.getenv("VISUALIZATION_BLOB_PREFIX", "scoring/visualizations"),
         kaggle_dataset=os.getenv("KAGGLE_DATASET", "alyyan/trash-detection"),
         roboflow_api_key=os.getenv("ROBOFLOW_API_KEY"),
         roboflow_workspace=os.getenv("ROBOFLOW_WORKSPACE", "compvision-bfglv"),

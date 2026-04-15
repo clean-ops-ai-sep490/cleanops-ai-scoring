@@ -224,3 +224,29 @@ def build_visualize_temp_url_payload(
         "yolo": yolo_result,
         "unet": unet_result["summary"],
     }
+
+
+def build_visualize_blob_url_payload(
+    source_type: str,
+    source: str,
+    env_key: str,
+    yolo_result: Dict[str, Any],
+    unet_result: Dict[str, Any],
+    scoring: Dict[str, Any],
+    visualization_url: str,
+    mime_type: str,
+    byte_size: int,
+) -> Dict[str, Any]:
+    return {
+        "source_type": source_type,
+        "source": source,
+        "env": env_key,
+        "visualization": {
+            "url": visualization_url,
+            "mime_type": mime_type,
+            "byte_size": byte_size,
+        },
+        "scoring": scoring,
+        "yolo": yolo_result,
+        "unet": unet_result["summary"],
+    }
