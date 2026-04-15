@@ -1,0 +1,20 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.training.txt ./
+COPY requirements.inference.txt ./
+RUN pip install --no-cache-dir --default-timeout=1200 --retries 10 -r requirements.training.txt
+
+COPY src ./src
+COPY scripts ./scripts
+RUN mkdir -p /app/outputs /app/data /app/models /app/unet_dataset
+
+CMD ["python", "src/train_yolo.py"]

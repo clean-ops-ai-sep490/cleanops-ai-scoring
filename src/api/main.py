@@ -1,7 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, Form, Request
 from fastapi.responses import JSONResponse, Response
-from fastapi.openapi.utils import get_openapi
-import base64
 import uvicorn
 from ultralytics import YOLO
 import io
@@ -9,15 +7,9 @@ from PIL import Image
 import os
 import sys
 import requests
-from pydantic import BaseModel
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import logging
-import threading
-import uuid
-from datetime import datetime, timedelta, timezone
-import cv2
-import numpy as np
 import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -25,7 +17,25 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from src.config.settings import get_env_rules, settings
-from src.models.unet_segmenter import UNetSegmenter
+from src.api.inference_utils import (
+    evaluate_image as evaluate_image_impl,
+    evaluate_image_with_artifacts as evaluate_image_with_artifacts_impl,
+    load_unet_model as load_unet_model_impl,
+    unet_predict_from_pil as unet_predict_from_pil_impl,
+    yolo_predict_from_pil as yolo_predict_from_pil_impl,
+)
+from src.api.openapi_utils import apply_custom_openapi
+from src.api.schemas import EvaluateVisualizeRequest, ImageURL
+from src.api.scoring_utils import normalize_env as normalize_env_impl
+from src.api.scoring_utils import parse_url_items as parse_url_items_impl
+from src.api.temp_store import TempVisualizationStore
+from src.api.visualization_utils import (
+    build_visualize_json_payload as build_visualize_json_payload_impl,
+    build_visualize_temp_url_payload as build_visualize_temp_url_payload_impl,
+    render_hybrid_overlay as render_hybrid_overlay_impl,
+    render_unet_overlay as render_unet_overlay_impl,
+)
+from src.storage.model_loader import ObjectStorageConfig, ObjectStorageModelLoader
 
 logger = logging.getLogger(__name__)
 
@@ -44,49 +54,14 @@ app = FastAPI(
         },
     ],
 )
-
-
-def _patch_binary_content_media_type(node: Any):
-    if isinstance(node, dict):
-        if (
-            node.get("type") == "string"
-            and node.get("contentMediaType") == "application/octet-stream"
-        ):
-            node.pop("contentMediaType", None)
-            node["format"] = "binary"
-
-        for value in node.values():
-            _patch_binary_content_media_type(value)
-    elif isinstance(node, list):
-        for item in node:
-            _patch_binary_content_media_type(item)
-
-
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-
-    schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        description=app.description,
-        openapi_version="3.0.3",
-        routes=app.routes,
-        tags=app.openapi_tags,
-    )
-
-    _patch_binary_content_media_type(schema)
-    app.openapi_schema = schema
-    return app.openapi_schema
-
-
-app.openapi = custom_openapi
+apply_custom_openapi(app)
 
 PROJECT_ROOT = settings.project_root
 BASE_OUTPUT_DIR = str(settings.base_output_dir)
 MODEL_PATH = settings.model_path
 UNET_MODEL_PATH = settings.unet_model_path
 UNET_IMG_SIZE = settings.unet_img_size
+MODEL_CACHE_DIR = settings.model_cache_dir
 unet_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CLASS_MAP = {
     0: "background",
@@ -104,57 +79,17 @@ APP_PUBLIC_BASE_URL = settings.app_public_base_url
 VISUALIZE_TEMP_URL_TTL_SEC = max(30, settings.visualize_temp_url_ttl_sec)
 VISUALIZE_TEMP_MAX_ITEMS = max(50, settings.visualize_temp_max_items)
 
+MODEL_STORAGE = ObjectStorageConfig(
+    enabled=settings.model_storage_enabled,
+    connection_string=settings.model_storage_connection_string,
+    container=settings.model_storage_container,
+    force_refresh=settings.model_force_refresh,
+)
+MODEL_LOADER = ObjectStorageModelLoader(MODEL_STORAGE, logger)
+MODEL_REQUIRE_BLOB = settings.model_require_blob
 
-class TempVisualizationStore:
-    def __init__(self, ttl_sec: int, max_items: int):
-        self._ttl_sec = ttl_sec
-        self._max_items = max_items
-        self._items: Dict[str, Dict[str, Any]] = {}
-        self._lock = threading.Lock()
-
-    def _prune_locked(self, now: datetime):
-        expired_keys = [k for k, v in self._items.items() if v["expires_at"] <= now]
-        for key in expired_keys:
-            self._items.pop(key, None)
-
-        overflow = len(self._items) - self._max_items
-        if overflow > 0:
-            sorted_keys = sorted(self._items.items(), key=lambda kv: kv[1]["expires_at"])
-            for key, _ in sorted_keys[:overflow]:
-                self._items.pop(key, None)
-
-    def save(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> Dict[str, Any]:
-        now = datetime.now(timezone.utc)
-        expires_at = now + timedelta(seconds=self._ttl_sec)
-        token = uuid.uuid4().hex
-
-        with self._lock:
-            self._prune_locked(now)
-            self._items[token] = {
-                "image": image_bytes,
-                "mime_type": mime_type,
-                "expires_at": expires_at,
-            }
-
-        return {
-            "token": token,
-            "mime_type": mime_type,
-            "byte_size": len(image_bytes),
-            "ttl_seconds": self._ttl_sec,
-            "expires_at_utc": expires_at.isoformat().replace("+00:00", "Z"),
-        }
-
-    def get(self, token: str) -> Optional[Dict[str, Any]]:
-        now = datetime.now(timezone.utc)
-        with self._lock:
-            self._prune_locked(now)
-            item = self._items.get(token)
-            if item is None:
-                return None
-            if item["expires_at"] <= now:
-                self._items.pop(token, None)
-                return None
-            return item
+YOLO_MODEL_SOURCE = "unknown"
+UNET_MODEL_SOURCE = "unknown"
 
 
 temp_visual_store = TempVisualizationStore(
@@ -164,305 +99,142 @@ temp_visual_store = TempVisualizationStore(
 
 # Load model global để tái sử dụng
 try:
-    if MODEL_PATH:
-        model = YOLO(MODEL_PATH)
+    yolo_cache_path = Path(MODEL_CACHE_DIR) / "active" / "yolo" / "model.pt"
+    yolo_fallback_paths = [] if MODEL_REQUIRE_BLOB else ([Path(MODEL_PATH)] if MODEL_PATH else [])
+    yolo_resolved_path, YOLO_MODEL_SOURCE = MODEL_LOADER.resolve_model_path(
+        settings.model_storage_active_yolo_key,
+        yolo_cache_path,
+        yolo_fallback_paths,
+    )
+
+    if not yolo_resolved_path and settings.yolo_weights_path and not MODEL_REQUIRE_BLOB:
+        yolo_resolved_path = settings.yolo_weights_path
+        YOLO_MODEL_SOURCE = "ultralytics-default"
+
+    if yolo_resolved_path:
+        model = YOLO(yolo_resolved_path)
+        MODEL_PATH = yolo_resolved_path
         print("✅ Load model thành công!")
         print(f"Model path: {MODEL_PATH}")
+        print(f"Model source: {YOLO_MODEL_SOURCE}")
     else:
         model = None
-        print("⚠️ Không có cấu hình MODEL_PATH, YOLO model chưa sẵn sàng.")
+        print("⚠️ Không tìm thấy YOLO model từ object storage hoặc local fallback.")
+        print(f"YOLO source: {YOLO_MODEL_SOURCE}")
 except Exception as e:
     model = None
+    YOLO_MODEL_SOURCE = f"load-error:{type(e).__name__}"
     print(f"Lỗi khởi tạo model: {e}")
 
 
-def load_unet_model(model_path: str):
-    global UNET_IMG_SIZE
-    if not model_path or not Path(model_path).exists():
-        return None
-
-    ckpt = torch.load(model_path, map_location=unet_device)
-    encoder = "resnet50"
-    if isinstance(ckpt, dict):
-        encoder = ckpt.get("encoder", "resnet50")
-        UNET_IMG_SIZE = int(ckpt.get("img_size", 384))
-
-    unet_model = UNetSegmenter(encoder_name=encoder, classes=3).to(unet_device)
-    if isinstance(ckpt, dict) and "model_state" in ckpt:
-        unet_model.load_state_dict(ckpt["model_state"])
-    else:
-        unet_model.load_state_dict(ckpt)
-    unet_model.eval()
-    return unet_model
-
-
 try:
-    unet_model = load_unet_model(UNET_MODEL_PATH)
+    unet_cache_path = Path(MODEL_CACHE_DIR) / "active" / "unet" / "model.pth"
+    unet_fallback_paths = [] if MODEL_REQUIRE_BLOB else [Path(UNET_MODEL_PATH)]
+    unet_resolved_path, UNET_MODEL_SOURCE = MODEL_LOADER.resolve_model_path(
+        settings.model_storage_active_unet_key,
+        unet_cache_path,
+        unet_fallback_paths,
+    )
+
+    if unet_resolved_path:
+        UNET_MODEL_PATH = unet_resolved_path
+
+    unet_model, UNET_IMG_SIZE = load_unet_model_impl(
+        UNET_MODEL_PATH,
+        unet_device,
+        UNET_IMG_SIZE,
+    )
     if unet_model is not None:
         print("✅ Load U-Net model thành công!")
         print(f"U-Net path: {UNET_MODEL_PATH}")
+        print(f"U-Net source: {UNET_MODEL_SOURCE}")
         print(f"U-Net input size: {UNET_IMG_SIZE}")
     else:
         print(f"⚠️ Không tìm thấy U-Net checkpoint tại {UNET_MODEL_PATH}")
+        print(f"U-Net source: {UNET_MODEL_SOURCE}")
 except Exception as e:
     unet_model = None
+    UNET_MODEL_SOURCE = f"load-error:{type(e).__name__}"
     print(f"Lỗi khởi tạo U-Net: {e}")
 
 
-def unet_predict_from_pil(img: Image.Image):
-    rgb = np.array(img.convert("RGB"))
-    h, w = rgb.shape[:2]
-
-    resized = cv2.resize(rgb, (UNET_IMG_SIZE, UNET_IMG_SIZE), interpolation=cv2.INTER_LINEAR)
-    x = resized.astype(np.float32) / 255.0
-    x = np.transpose(x, (2, 0, 1))
-    x = torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(unet_device)
-
-    with torch.no_grad():
-        logits = unet_model(x)
-        pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
-
-    stain_pixels = int((pred == 1).sum())
-    wet_pixels = int((pred == 2).sum())
-    total_pixels = int(pred.size)
-
-    stain_pct = (stain_pixels / total_pixels) * 100.0
-    wet_pct = (wet_pixels / total_pixels) * 100.0
-    dirty_pct = ((stain_pixels + wet_pixels) / total_pixels) * 100.0
-
-    pred_original_size = cv2.resize(pred, (w, h), interpolation=cv2.INTER_NEAREST)
-
-    return {
-        "mask": pred,
-        "mask_original_size": pred_original_size,
-        "summary": {
-            "input_size": [w, h],
-            "model_input_size": UNET_IMG_SIZE,
-            "class_mapping": CLASS_MAP,
-            "stain_or_water_pixels": stain_pixels,
-            "wet_surface_pixels": wet_pixels,
-            "stain_or_water_coverage_pct": round(stain_pct, 3),
-            "wet_surface_coverage_pct": round(wet_pct, 3),
-            "total_dirty_coverage_pct": round(dirty_pct, 3),
-        },
-        "rgb": rgb,
-    }
 
 
-def render_unet_overlay(rgb: np.ndarray, pred_original_size: np.ndarray):
-    overlay = rgb.copy()
-
-    # Blend vùng stain/water bằng màu đỏ.
-    stain_region = pred_original_size == 1
-    overlay[stain_region] = (overlay[stain_region] * 0.6 + np.array([255, 80, 80]) * 0.4).astype(np.uint8)
-
-    # Blend vùng wet surface bằng màu cyan.
-    wet_region = pred_original_size == 2
-    overlay[wet_region] = (overlay[wet_region] * 0.6 + np.array([80, 255, 255]) * 0.4).astype(np.uint8)
-
-    out = Image.fromarray(overlay)
-    b = io.BytesIO()
-    out.save(b, format="JPEG")
-    b.seek(0)
-    return b.getvalue()
+def normalize_env(env: Optional[str]) -> str:
+    return normalize_env_impl(env, ENV_RULES)
 
 
-def yolo_predict_from_pil(img: Image.Image):
-    results = model.predict(source=img, conf=YOLO_CONF, save=False, verbose=False)
-
-    detections = []
-    for r in results:
-        boxes = r.boxes
-        for box in boxes:
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-            conf = box.conf[0].item()
-            cls_id = int(box.cls[0].item())
-            class_name = model.names[cls_id]
-            detections.append(
-                {
-                    "class_name": class_name,
-                    "class_id": cls_id,
-                    "confidence": float(f"{conf:.3f}"),
-                    "bbox": [x1, y1, x2, y2],
-                }
-            )
-
-    return {
-        "detections_count": len(detections),
-        "results": detections,
-    }
+def parse_url_items(image_urls: List[str]) -> List[str]:
+    return parse_url_items_impl(image_urls)
 
 
-def normalize_env(env: Optional[str]):
-    env_key = (env or "LOBBY_CORRIDOR").strip().upper()
-    if env_key not in ENV_RULES:
-        raise ValueError(
-            f"Unsupported env '{env_key}'. Allowed envs: {', '.join(sorted(ENV_RULES.keys()))}"
-        )
-    return env_key
+def yolo_predict_from_pil(img: Image.Image) -> Dict[str, Any]:
+    return yolo_predict_from_pil_impl(
+        img,
+        model=model,
+        yolo_conf=YOLO_CONF,
+    )
 
 
-def clamp(v: float, lo: float, hi: float):
-    return max(lo, min(v, hi))
-
-
-def score_image(total_dirty_coverage_pct: float, detections_count: int, env_key: str):
-    base_clean_score = 100.0 - float(total_dirty_coverage_pct)
-    object_penalty = min(30.0, float(detections_count) * 5.0)
-    quality_score = clamp(base_clean_score - object_penalty, 0.0, 100.0)
-
-    pass_threshold = float(ENV_RULES[env_key]["pass_threshold"])
-    if quality_score >= pass_threshold:
-        verdict = "PASS"
-    elif quality_score >= PENDING_LOWER_BOUND:
-        verdict = "PENDING"
-    else:
-        verdict = "FAIL"
-
-    reasons = []
-    if total_dirty_coverage_pct >= 20.0:
-        reasons.append("coverage high")
-    if detections_count > 0:
-        reasons.append("objects remain")
-    if not reasons:
-        reasons.append("good cleanliness")
-
-    return {
-        "base_clean_score": round(base_clean_score, 3),
-        "object_penalty": round(object_penalty, 3),
-        "quality_score": round(quality_score, 3),
-        "pass_threshold": pass_threshold,
-        "verdict": verdict,
-        "reasons": reasons,
-    }
-
-
-def evaluate_image(img: Image.Image, env_key: str):
-    yolo_result, unet_result, score = evaluate_image_with_artifacts(img, env_key)
-
-    return {
-        "yolo": yolo_result,
-        "unet": unet_result["summary"],
-        "scoring": score,
-    }
+def unet_predict_from_pil(img: Image.Image) -> Dict[str, Any]:
+    return unet_predict_from_pil_impl(
+        img,
+        unet_model=unet_model,
+        unet_img_size=UNET_IMG_SIZE,
+        unet_device=unet_device,
+        class_map=CLASS_MAP,
+    )
 
 
 def evaluate_image_with_artifacts(img: Image.Image, env_key: str):
-    yolo_result = yolo_predict_from_pil(img)
-    unet_result = unet_predict_from_pil(img)
-
-    score = score_image(
-        total_dirty_coverage_pct=unet_result["summary"]["total_dirty_coverage_pct"],
-        detections_count=yolo_result["detections_count"],
-        env_key=env_key,
+    return evaluate_image_with_artifacts_impl(
+        img,
+        env_key,
+        model=model,
+        unet_model=unet_model,
+        yolo_conf=YOLO_CONF,
+        unet_img_size=UNET_IMG_SIZE,
+        unet_device=unet_device,
+        class_map=CLASS_MAP,
+        env_rules=ENV_RULES,
+        pending_lower_bound=PENDING_LOWER_BOUND,
     )
-    return yolo_result, unet_result, score
+
+
+def evaluate_image(img: Image.Image, env_key: str) -> Dict[str, Any]:
+    return evaluate_image_impl(
+        img,
+        env_key,
+        model=model,
+        unet_model=unet_model,
+        yolo_conf=YOLO_CONF,
+        unet_img_size=UNET_IMG_SIZE,
+        unet_device=unet_device,
+        class_map=CLASS_MAP,
+        env_rules=ENV_RULES,
+        pending_lower_bound=PENDING_LOWER_BOUND,
+    )
+
+
+def render_unet_overlay(rgb, pred_original_size):
+    return render_unet_overlay_impl(rgb, pred_original_size)
 
 
 def render_hybrid_overlay(
-    rgb: np.ndarray,
-    pred_original_size: np.ndarray,
+    rgb,
+    pred_original_size,
     yolo_result: Dict[str, Any],
     scoring: Dict[str, Any],
     env_key: str,
 ):
-    overlay = rgb.copy()
-
-    stain_region = pred_original_size == 1
-    overlay[stain_region] = (overlay[stain_region] * 0.5 + np.array([255, 80, 80]) * 0.5).astype(np.uint8)
-
-    wet_region = pred_original_size == 2
-    overlay[wet_region] = (overlay[wet_region] * 0.5 + np.array([80, 255, 255]) * 0.5).astype(np.uint8)
-
-    composed = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
-
-    stain_mask = (pred_original_size == 1).astype(np.uint8) * 255
-    wet_mask = (pred_original_size == 2).astype(np.uint8) * 255
-
-    stain_contours = cv2.findContours(stain_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    wet_contours = cv2.findContours(wet_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    stain_contours = stain_contours[0] if len(stain_contours) == 2 else stain_contours[1]
-    wet_contours = wet_contours[0] if len(wet_contours) == 2 else wet_contours[1]
-
-    cv2.drawContours(composed, stain_contours, -1, (30, 30, 220), 2)
-    cv2.drawContours(composed, wet_contours, -1, (220, 200, 30), 2)
-
-    for item in yolo_result.get("results", []):
-        x1, y1, x2, y2 = [int(v) for v in item.get("bbox", [0, 0, 0, 0])]
-        class_name = str(item.get("class_name", "obj"))
-        confidence = float(item.get("confidence", 0.0))
-        label = f"{class_name} {confidence:.2f}"
-
-        cv2.rectangle(composed, (x1, y1), (x2, y2), (60, 200, 20), 2)
-
-        (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
-        text_top = max(0, y1 - text_h - 10)
-        cv2.rectangle(composed, (x1, text_top), (x1 + text_w + 8, text_top + text_h + 8), (60, 200, 20), -1)
-        cv2.putText(
-            composed,
-            label,
-            (x1 + 4, text_top + text_h + 2),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 0, 0),
-            2,
-            cv2.LINE_AA,
-        )
-
-    verdict = str(scoring.get("verdict", "UNKNOWN")).upper()
-    verdict_colors = {
-        "PASS": (60, 175, 60),
-        "PENDING": (0, 165, 255),
-        "FAIL": (40, 40, 220),
-    }
-    verdict_color = verdict_colors.get(verdict, (180, 180, 180))
-
-    panel_x1, panel_y1 = 12, 12
-    panel_x2, panel_y2 = 560, 192
-    cv2.rectangle(composed, (panel_x1, panel_y1), (panel_x2, panel_y2), (20, 20, 20), -1)
-    cv2.rectangle(composed, (panel_x1, panel_y1), (panel_x2, panel_y2), verdict_color, 2)
-
-    info_lines = [
-        f"ENV: {env_key}",
-        f"VERDICT: {verdict}",
-        f"QUALITY SCORE: {float(scoring.get('quality_score', 0.0)):.2f}",
-        f"DIRTY COVERAGE: {float(100.0 - float(scoring.get('base_clean_score', 0.0))):.2f}%",
-        f"YOLO DETECTIONS: {int(yolo_result.get('detections_count', 0))}",
-    ]
-
-    y_text = panel_y1 + 28
-    for idx, line in enumerate(info_lines):
-        color = (255, 255, 255) if idx != 1 else verdict_color
-        cv2.putText(
-            composed,
-            line,
-            (panel_x1 + 12, y_text),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.65,
-            color,
-            2,
-            cv2.LINE_AA,
-        )
-        y_text += 30
-
-    legend_y = panel_y2 + 28
-    cv2.rectangle(composed, (panel_x1, legend_y), (panel_x1 + 18, legend_y + 18), (30, 30, 220), -1)
-    cv2.putText(composed, "U-Net stain/water", (panel_x1 + 26, legend_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (30, 30, 30), 2, cv2.LINE_AA)
-
-    legend_y += 28
-    cv2.rectangle(composed, (panel_x1, legend_y), (panel_x1 + 18, legend_y + 18), (220, 200, 30), -1)
-    cv2.putText(composed, "U-Net wet surface", (panel_x1 + 26, legend_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (30, 30, 30), 2, cv2.LINE_AA)
-
-    legend_y += 28
-    cv2.rectangle(composed, (panel_x1, legend_y), (panel_x1 + 18, legend_y + 18), (60, 200, 20), -1)
-    cv2.putText(composed, "YOLO objects", (panel_x1 + 26, legend_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (30, 30, 30), 2, cv2.LINE_AA)
-
-    out_rgb = cv2.cvtColor(composed, cv2.COLOR_BGR2RGB)
-    out = Image.fromarray(out_rgb)
-    b = io.BytesIO()
-    out.save(b, format="JPEG", quality=VISUALIZE_JPEG_QUALITY)
-    b.seek(0)
-    return b.getvalue()
+    return render_hybrid_overlay_impl(
+        rgb,
+        pred_original_size,
+        yolo_result=yolo_result,
+        scoring=scoring,
+        env_key=env_key,
+        visualize_jpeg_quality=VISUALIZE_JPEG_QUALITY,
+    )
 
 
 def build_visualize_json_payload(
@@ -474,24 +246,15 @@ def build_visualize_json_payload(
     scoring: Dict[str, Any],
     rendered: bytes,
 ):
-    image_base64 = base64.b64encode(rendered).decode("ascii")
-    return {
-        "source_type": source_type,
-        "source": source,
-        "env": env_key,
-        "mime_type": "image/jpeg",
-        "encoding": "base64",
-        "image_base64": image_base64,
-        "scoring": scoring,
-        "yolo": yolo_result,
-        "unet": unet_result["summary"],
-    }
-
-
-def build_temp_visualization_url(request: Request, token: str) -> str:
-    if APP_PUBLIC_BASE_URL:
-        return f"{APP_PUBLIC_BASE_URL.rstrip('/')}/visualizations/{token}"
-    return str(request.url_for("get_visualization_image", token=token))
+    return build_visualize_json_payload_impl(
+        source_type=source_type,
+        source=source,
+        env_key=env_key,
+        yolo_result=yolo_result,
+        unet_result=unet_result,
+        scoring=scoring,
+        rendered=rendered,
+    )
 
 
 def build_visualize_temp_url_payload(
@@ -504,44 +267,18 @@ def build_visualize_temp_url_payload(
     scoring: Dict[str, Any],
     rendered: bytes,
 ):
-    ticket = temp_visual_store.save(rendered, mime_type="image/jpeg")
-    visualization_url = build_temp_visualization_url(request, ticket["token"])
-
-    return {
-        "source_type": source_type,
-        "source": source,
-        "env": env_key,
-        "visualization": {
-            "token": ticket["token"],
-            "url": visualization_url,
-            "mime_type": ticket["mime_type"],
-            "byte_size": ticket["byte_size"],
-            "ttl_seconds": ticket["ttl_seconds"],
-            "expires_at_utc": ticket["expires_at_utc"],
-        },
-        "scoring": scoring,
-        "yolo": yolo_result,
-        "unet": unet_result["summary"],
-    }
-
-
-def parse_url_items(image_urls: List[str]) -> List[str]:
-    parsed: List[str] = []
-    for raw in image_urls:
-        if not isinstance(raw, str):
-            continue
-
-        candidate = raw.strip()
-        if not candidate:
-            continue
-
-        # Swagger/UI integrations may send many URLs in one comma-separated string.
-        parts = [p.strip() for p in candidate.split(",")]
-        for part in parts:
-            if part:
-                parsed.append(part)
-
-    return parsed
+    return build_visualize_temp_url_payload_impl(
+        request=request,
+        source_type=source_type,
+        source=source,
+        env_key=env_key,
+        yolo_result=yolo_result,
+        unet_result=unet_result,
+        scoring=scoring,
+        rendered=rendered,
+        temp_visual_store=temp_visual_store,
+        app_public_base_url=APP_PUBLIC_BASE_URL,
+    )
 
 @app.get("/", tags=["production"])
 def health_check():
@@ -550,7 +287,12 @@ def health_check():
         "yolo_loaded": model is not None,
         "unet_loaded": unet_model is not None,
         "yolo_model_path": MODEL_PATH,
+        "yolo_model_source": YOLO_MODEL_SOURCE,
         "unet_model_path": UNET_MODEL_PATH,
+        "unet_model_source": UNET_MODEL_SOURCE,
+        "model_storage_enabled": MODEL_STORAGE.enabled,
+        "model_storage_container": MODEL_STORAGE.container,
+        "model_require_blob": MODEL_REQUIRE_BLOB,
         "max_batch_images": MAX_BATCH_IMAGES,
         "pending_lower_bound": PENDING_LOWER_BOUND,
         "visualize_jpeg_quality": VISUALIZE_JPEG_QUALITY,
@@ -593,15 +335,6 @@ async def predict_image(file: UploadFile = File(...)):
         
     except Exception as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
-
-class ImageURL(BaseModel):
-    url: str
-
-
-class EvaluateVisualizeRequest(BaseModel):
-    url: str
-    env: Optional[str] = "LOBBY_CORRIDOR"
-
 
 @app.post("/predict-unet", tags=["production"])
 async def predict_unet(file: UploadFile = File(...)):
@@ -693,7 +426,7 @@ async def predict_image_url(payload: ImageURL):
 
 @app.post("/evaluate-batch", tags=["production"])
 async def evaluate_batch(
-    files: List[UploadFile | str] = File(default=[]),
+    files: List[UploadFile] = File(default=[]),
     image_urls: List[str] = Form(default=[]),
     env: str = Form(default="LOBBY_CORRIDOR"),
 ):
@@ -702,7 +435,7 @@ async def evaluate_batch(
     if not unet_model:
         return JSONResponse(status_code=500, content={"error": "U-Net model chưa được tải."})
 
-    upload_items = [u for u in files if isinstance(u, UploadFile) and (u.filename or "").strip()]
+    upload_items = [u for u in files if (u.filename or "").strip()]
     url_items = parse_url_items(image_urls)
 
     total_images = len(upload_items) + len(url_items)

@@ -24,13 +24,26 @@ Phân vùng vết bẩn, nước đọng, bùn đất (`detected_stains`, `dirt_
 ```
 cleaning_ai/
 ├── src/
+│   ├── api/
+│   │   ├── main.py           # FastAPI entrypoint (scoring production)
+│   │   ├── inference_utils.py
+│   │   ├── visualization_utils.py
+│   │   ├── scoring_utils.py
+│   │   ├── temp_store.py
+│   │   ├── schemas.py
+│   │   └── openapi_utils.py
 │   ├── download_dataset.py   # Tải dữ liệu YOLO (API) & Cấu trúc thư mục U-Net
 │   ├── models/
 │   │   ├── yolo_detector.py  # Wrapper cho YOLOv8 (phát hiện rác rắn)
 │   │   └── unet_segmenter.py # Wrapper cho U-Net (phân vùng vết bẩn điểm ảnh)
 │   ├── train_yolo.py         # Script train riêng rẽ cho YOLO
 │   ├── train_unet.py         # Script train riêng rẽ cho U-Net
-│   └── infer.py              # Backend gộp kết quả 2 model -> Báo cáo PoC
+├── archive/
+│   └── legacy/
+│       └── src/
+│           ├── infer.py      # Legacy PoC inference (CleaningQualityNet)
+│           ├── model.py      # Legacy model definition
+│           └── train.py      # Legacy training script
 ├── data/
 │   └── raw/
 │       ├── yolo/             # Chứa 3 bộ dataset Bounding Box
@@ -110,8 +123,227 @@ docker compose up -d --build
 docker compose ps
 ```
 
+Mac dinh service API build voi `requirements.inference.txt` de giam footprint runtime.
+
+Neu can build image day du phuc vu train trong cung Dockerfile chinh:
+
+```powershell
+$env:SCORING_REQUIREMENTS_FILE="requirements.training.txt"
+docker compose build cleanops-ai-scoring-api
+```
+
+Trainer image da duoc tach rieng (`Dockerfile.train`) va chay theo profile `trainer`:
+
+```powershell
+docker compose --profile trainer run --rm cleanops-ai-scoring-trainer
+```
+
+### Docker-only quick flow (khong can notebook)
+
+Neu can test nhanh toan bo bang Docker, uu tien chay script CLI trong trainer container:
+
+```powershell
+# 1) Build trainer image
+docker compose build cleanops-ai-scoring-trainer
+
+# 2) Export reviewed snapshots -> bridge dataset
+docker compose --profile trainer run --rm cleanops-ai-scoring-trainer python scripts/build_retrain_bridge_dataset.py --container retrain-samples --prefix scoring/retrain-samples --output-root data/retrain_bridge --train-ratio 0.8 --valid-ratio 0.1 --fail-mode pseudo --include-fail-unlabeled
+
+# 3) Preprocess U-Net data (neu can)
+docker compose --profile trainer run --rm cleanops-ai-scoring-trainer python src/preprocess_unet_data.py
+
+# 4) Train YOLO (tu script, khong qua notebook)
+docker compose --profile trainer run --rm cleanops-ai-scoring-trainer python src/train_yolo.py
+
+# 5) Train U-Net (tu script, khong qua notebook)
+docker compose --profile trainer run --rm cleanops-ai-scoring-trainer python src/train_unet.py --epochs 30 --batch 4 --workers 0
+```
+
+Luu y:
+
+- Notebook van co the chay neu tu setup Jupyter trong container, nhung khong can thiet cho flow retrain nhanh.
+- Compose da mount `./data`, `./models`, `./unet_dataset` vao trainer de script chay truc tiep tren du lieu host.
+
+Co the override lenh train (vi du train U-Net):
+
+```powershell
+$env:SCORING_TRAIN_COMMAND="python src/train_unet.py --epochs 30"
+docker compose --profile trainer run --rm cleanops-ai-scoring-trainer
+```
+
 Ban build self-contained image nen khong can mount `models` hay `outputs` de API len.
 Neu khong co model YOLO da train trong image, service se fallback sang `yolov8n.pt`.
+
+## Model Storage (Azure Blob)
+
+Scoring API uu tien nap model tu Azure Blob Storage, sau do cache vao volume local de restart nhanh hon.
+
+- Model active YOLO: `scoring/active/yolo/model.pt`
+- Model active U-Net: `scoring/active/unet/model.pth`
+- Container mac dinh: `models`
+
+Bien moi truong lien quan:
+
+- `MODEL_STORAGE_ENABLED=true`
+- `MODEL_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=<storage_account>;AccountKey=<account_key>;EndpointSuffix=core.windows.net`
+- `MODEL_STORAGE_CONTAINER=models`
+- `MODEL_STORAGE_ACTIVE_YOLO_KEY=scoring/active/yolo/model.pt`
+- `MODEL_STORAGE_ACTIVE_UNET_KEY=scoring/active/unet/model.pth`
+- `MODEL_CACHE_DIR=/app/model-cache`
+- `MODEL_FORCE_REFRESH=false`
+- `SCORING_BLOB_NAMESPACE=scoring`
+- `SCORING_BLOB_MODELS_CONTAINER=models`
+- `SCORING_BLOB_RETRAIN_CONTAINER=retrain`
+- `SCORING_BLOB_EXTERNAL_PREFIX=scoring/external/latest`
+- `SCORING_BLOB_ACTIVE_MANIFEST_KEY=scoring/manifests/active.json`
+
+Neu object storage khong co file active, API se fallback sang model local (neu co mount `./models:/app/models:ro`).
+
+## Local Retrain (resource nhe cho server)
+
+Flow de xai may ca nhan train:
+
+1. Train tren may ca nhan (ngoai server).
+2. Publish run artifact len Azure Blob container `retrain` theo namespace `scoring/runs/<runId>/...`.
+3. Promote run (hoac external candidate) sang key active trong container `models` (`scoring/active/*`).
+4. Restart scoring API de nap active model moi.
+
+Giai doan hien tai uu tien Blob-first; khong bat buoc server goi ngrok trigger retrain.
+
+### Publish retrain run artifacts tu may local
+
+Script publish run artifact (model + metrics + optional train log):
+
+```powershell
+python scripts/publish_retrain_run_to_blob.py \
+  --connection-string "<azure_blob_connection_string>" \
+  --container retrain \
+  --namespace scoring \
+  --run-id run-20260115T103000Z \
+  --yolo path/to/yolo_best.pt \
+  --unet path/to/unet_best.pth \
+  --metrics path/to/run_metrics.json \
+  --log path/to/train.log
+```
+
+Script se upload vao:
+
+- `scoring/runs/<runId>/artifacts/yolo/model.pt`
+- `scoring/runs/<runId>/artifacts/unet/model.pth`
+- `scoring/runs/<runId>/metrics/metrics.json`
+- `scoring/runs/<runId>/logs/train.log` (neu co)
+- `scoring/runs/<runId>/manifests/run.json`
+
+### Upload external candidate artifacts nhanh
+
+Sau khi train tren may ca nhan, co the upload candidate model + metrics len Azure Blob bang script:
+
+```powershell
+python scripts/upload_candidate_to_blob.py \
+  --connection-string "<azure_blob_connection_string>" \
+  --container retrain \
+  --prefix scoring/external/latest \
+  --yolo path/to/yolo_best.pt \
+  --unet path/to/unet_best.pth \
+  --metrics path/to/candidate_metrics.json
+```
+
+Format metrics JSON can dam bao gate worker doc duoc:
+
+```json
+{
+  "yolo": { "map": 0.61 },
+  "unet": { "miou": 0.73 }
+}
+```
+
+Worker backend dang duoc cau hinh default doc external candidate prefix `scoring/external/latest` trong Azure Blob container `retrain`.
+
+### Promote run/external candidate sang active models
+
+Sau khi run dat gate, promote artifact sang key active trong container `models`:
+
+```powershell
+python scripts/promote_active_scoring_model.py \
+  --connection-string "<azure_blob_connection_string>" \
+  --source-container retrain \
+  --target-container models \
+  --namespace scoring \
+  --run-id run-20260115T103000Z
+```
+
+Neu khong truyen `--run-id`, script se lay external candidate theo `--external-prefix` (default `scoring/external/latest`).
+
+Script promotion tu dong:
+
+- backup active hien tai vao `scoring/archive/<timestamp>/...`
+- copy bo model moi vao `scoring/active/...`
+- cap nhat manifest `scoring/manifests/active.json`
+
+### Verify model moi da duoc runtime su dung
+
+Sau khi promote, can restart API roi doi chieu health + hash de xac nhan runtime dang dung model moi:
+
+```powershell
+docker compose restart cleanops-ai-scoring-api
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/" -Method Get | ConvertTo-Json -Depth 20
+```
+
+Ky vong health:
+
+- `yolo_model_source` la `object-storage:downloaded` hoac `object-storage:cache-hit`
+- `unet_model_source` la `object-storage:downloaded` hoac `object-storage:cache-hit`
+- `yolo_model_path`/`unet_model_path` tro den `/app/model-cache/active/...`
+
+So hash blob active va hash cache trong container:
+
+```powershell
+# 1) Lay hash file cache trong container
+docker exec cleanops-ai-scoring-cleanops-ai-scoring-api-1 sh -lc "sha256sum /app/model-cache/active/yolo/model.pt /app/model-cache/active/unet/model.pth"
+
+# 2) Download blob active va hash local
+az storage blob download --connection-string "$env:MODEL_STORAGE_CONNECTION_STRING" --container-name models --name scoring/active/yolo/model.pt --file tmp/active_yolo.pt --overwrite --output none
+az storage blob download --connection-string "$env:MODEL_STORAGE_CONNECTION_STRING" --container-name models --name scoring/active/unet/model.pth --file tmp/active_unet.pth --overwrite --output none
+Get-FileHash tmp/active_yolo.pt -Algorithm SHA256
+Get-FileHash tmp/active_unet.pth -Algorithm SHA256
+```
+
+Neu hash blob active trung hash trong `/app/model-cache/active/*` thi xac nhan API dang dung model moi.
+
+Neu can ep download lai bo qua cache, dat `MODEL_FORCE_REFRESH=true` roi restart lai API.
+
+### Bridge reviewed snapshots thanh dataset train
+
+Sau khi supervisor review `PENDING -> PASS/FAIL`, backend worker se snapshot anh vao container `retrain-samples`.
+
+Script bridge duoi day se doc manifest reviewed va xuat dataset local cho 2 notebook train:
+
+- YOLO: `PASS` -> negative sample (tao file label `.txt` rong)
+- U-Net: `PASS` -> mask nen class `0` (toan bo background)
+- `FAIL` mac dinh duoc pseudo-label bang model hien tai (confidence-gated)
+- Mau `FAIL` kho (do tin cay thap) co the bo qua hoac dua vao bucket unlabeled
+
+```powershell
+python scripts/build_retrain_bridge_dataset.py \
+  --container retrain-samples \
+  --prefix scoring/retrain-samples \
+  --output-root data/retrain_bridge \
+  --train-ratio 0.8 \
+  --valid-ratio 0.1 \
+  --fail-mode pseudo \
+  --include-fail-unlabeled
+```
+
+Sau khi chay xong:
+
+- Bao cao tong hop: `data/retrain_bridge/reports/bridge_summary.json`
+- Chi tiet tung mau: `data/retrain_bridge/reports/bridge_index.jsonl`
+
+Ghi chu quan trong:
+
+- Neu khong truyen `--connection-string`, script se tu doc tu env `MODEL_STORAGE_CONNECTION_STRING`.
+- Verdict review chi la nhan cap anh, khong co bbox/mask ground truth day du cho `FAIL`.
+- Pseudo-label `FAIL` giup closed-loop nhanh; de on dinh hon, nen dat confidence threshold va bo qua mau kho.
 
 Dung lai:
 

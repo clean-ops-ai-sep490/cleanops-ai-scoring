@@ -3,15 +3,55 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        REQUIREMENTS_FILE: ${SCORING_REQUIREMENTS_FILE:-requirements.inference.txt}
     env_file:
       - .env
     environment:
       - BASE_OUTPUT_DIR=${BASE_OUTPUT_DIR:-/app/outputs}
       - YOLO_TRAIN_PROJECT_DIR=${YOLO_TRAIN_PROJECT_DIR:-/app/outputs/yolo_training_4_4}
+      - MODEL_CACHE_DIR=${MODEL_CACHE_DIR:-/app/model-cache}
+      - MODEL_STORAGE_ENABLED=${MODEL_STORAGE_ENABLED:-true}
+      - MODEL_STORAGE_CONNECTION_STRING=${MODEL_STORAGE_CONNECTION_STRING:-}
+      - MODEL_STORAGE_CONTAINER=${MODEL_STORAGE_CONTAINER:-models}
+      - MODEL_STORAGE_ACTIVE_YOLO_KEY=${MODEL_STORAGE_ACTIVE_YOLO_KEY:-scoring/active/yolo/model.pt}
+      - MODEL_STORAGE_ACTIVE_UNET_KEY=${MODEL_STORAGE_ACTIVE_UNET_KEY:-scoring/active/unet/model.pth}
+      - MODEL_FORCE_REFRESH=${MODEL_FORCE_REFRESH:-false}
+      - MODEL_REQUIRE_BLOB=${MODEL_REQUIRE_BLOB:-true}
       - VISUALIZE_JPEG_QUALITY=${VISUALIZE_JPEG_QUALITY:-92}
       - VISUALIZE_TEMP_URL_TTL_SEC=${VISUALIZE_TEMP_URL_TTL_SEC:-900}
       - VISUALIZE_TEMP_MAX_ITEMS=${VISUALIZE_TEMP_MAX_ITEMS:-200}
       - APP_PUBLIC_BASE_URL=${APP_PUBLIC_BASE_URL:-http://localhost:8000}
     ports:
       - "8000:8000"
+    volumes:
+      - cleanopsai-scoring-outputs:/app/outputs
+      - cleanopsai-model-cache:/app/model-cache
+      - ./models:/app/models:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
+
+  cleanops-ai-scoring-trainer:
+    profiles: ["trainer"]
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    env_file:
+      - .env
+    environment:
+      - BASE_OUTPUT_DIR=${BASE_OUTPUT_DIR:-/app/outputs}
+      - YOLO_TRAIN_PROJECT_DIR=${YOLO_TRAIN_PROJECT_DIR:-/app/outputs/yolo_training_4_4}
+    volumes:
+      - cleanopsai-scoring-outputs:/app/outputs
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./unet_dataset:/app/unet_dataset
+    command: ${SCORING_TRAIN_COMMAND:-python src/train_yolo.py}
+    restart: "no"
+
+volumes:
+  cleanopsai-scoring-outputs:
+    name: cleanopsai-scoring-outputs
+  cleanopsai-model-cache:
+    name: cleanopsai-model-cache

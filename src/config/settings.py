@@ -179,9 +179,17 @@ class Settings:
     app_public_base_url: str
 
     base_output_dir: Path
+    model_cache_dir: Path
     model_path: Optional[str]
     unet_model_path: str
     unet_img_size: int
+    model_storage_enabled: bool
+    model_storage_connection_string: str
+    model_storage_container: str
+    model_storage_active_yolo_key: str
+    model_storage_active_unet_key: str
+    model_force_refresh: bool
+    model_require_blob: bool
 
     yolo_conf: float
     max_batch_images: int
@@ -219,6 +227,9 @@ _load_env_file()
 def _build_settings() -> Settings:
     base_output_dir = _resolve_path(os.getenv("BASE_OUTPUT_DIR"), PROJECT_ROOT / "outputs")
     assert base_output_dir is not None
+
+    model_cache_dir = _resolve_path(os.getenv("MODEL_CACHE_DIR"), PROJECT_ROOT / "model-cache")
+    assert model_cache_dir is not None
 
     model_path_raw = os.getenv("MODEL_PATH")
     resolved_model_path = _resolve_path(model_path_raw)
@@ -291,9 +302,17 @@ def _build_settings() -> Settings:
         request_timeout_sec=_as_int("REQUEST_TIMEOUT_SEC", 30),
         app_public_base_url=os.getenv("APP_PUBLIC_BASE_URL", "").strip(),
         base_output_dir=base_output_dir,
+        model_cache_dir=model_cache_dir,
         model_path=model_path,
         unet_model_path=str(unet_model_path),
         unet_img_size=_as_int("UNET_IMG_SIZE", 384),
+        model_storage_enabled=_as_bool("MODEL_STORAGE_ENABLED", False),
+        model_storage_connection_string=os.getenv("MODEL_STORAGE_CONNECTION_STRING", ""),
+        model_storage_container=os.getenv("MODEL_STORAGE_CONTAINER", "models"),
+        model_storage_active_yolo_key=os.getenv("MODEL_STORAGE_ACTIVE_YOLO_KEY", "scoring/active/yolo/model.pt"),
+        model_storage_active_unet_key=os.getenv("MODEL_STORAGE_ACTIVE_UNET_KEY", "scoring/active/unet/model.pth"),
+        model_force_refresh=_as_bool("MODEL_FORCE_REFRESH", False),
+        model_require_blob=_as_bool("MODEL_REQUIRE_BLOB", False),
         yolo_conf=_as_float("YOLO_CONF", 0.25),
         max_batch_images=_as_int("MAX_BATCH_IMAGES", 5),
         pending_lower_bound=_as_float("PENDING_LOWER_BOUND", 50.0),

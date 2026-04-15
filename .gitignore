@@ -8,6 +8,7 @@ unet_dataset/
 # --- Outputs & Model Weights ---
 outputs/
 runs/
+model-cache/
 *.pt
 *.pth
 *.ckpt

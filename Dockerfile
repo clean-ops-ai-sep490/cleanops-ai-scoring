@@ -2,6 +2,7 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ARG REQUIREMENTS_FILE=requirements.inference.txt
 
 WORKDIR /app
 
@@ -10,10 +11,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir --default-timeout=1200 --retries 10 -r requirements.txt
+COPY requirements.inference.txt ./
+COPY requirements.training.txt ./
+RUN pip install --no-cache-dir --default-timeout=1200 --retries 10 -r ${REQUIREMENTS_FILE}
 
 COPY src ./src
-COPY models ./models
+RUN mkdir -p /app/model-cache /app/outputs
 
 EXPOSE 8000
 
