@@ -12,6 +12,9 @@ __pycache__/
 
 # Large local artifacts not needed for runtime image
 outputs/
+archive/
+models/
+model-cache/
 notebooks/
 data/
 yolo_dataset/

@@ -125,6 +125,13 @@ docker compose ps
 
 Mac dinh service API build voi `requirements.inference.txt` de giam footprint runtime, trainer duoc tach rieng qua `Dockerfile.train`.
 
+Runtime image hien tai chi nham muc dich inference + retrain bridge:
+
+- dung `requirements.inference.txt`
+- dung `opencv-python-headless` de giam GUI/native baggage
+- khong bake model checkpoint vao image
+- healthcheck Docker bam vao `GET /health/ready`
+
 ### Strict mode (blob-first, fail-fast)
 
 De bat stricter runtime policy cho API (require blob active model) voi 1 compose file duy nhat:
@@ -155,20 +162,20 @@ Remove-Item Env:MODEL_FORCE_REFRESH -ErrorAction SilentlyContinue
 - Khong de APP_RELOAD=true khi chay production.
 - Kiem tra startup logs de chac chan khong dump thong tin nhay cam.
 
-Neu can build image day du phuc vu train trong cung Dockerfile chinh:
+Khong khuyen nghi build API image bang training requirements trong flow thuong xuyen vi lam image to hon dang ke. Chi dung cach nay khi can debug:
 
 ```powershell
 $env:SCORING_REQUIREMENTS_FILE="requirements.training.txt"
 docker compose build cleanops-ai-scoring-api
 ```
 
-Trainer image chay theo profile `trainer`:
+Trainer image van co san theo profile `trainer`, nhung khong con la duong deployment mac dinh:
 
 ```powershell
 docker compose --profile trainer run --rm cleanops-ai-scoring-trainer
 ```
 
-### Docker-only quick flow (khong can notebook)
+### Docker-only quick flow (optional, khong phai duong uu tien)
 
 Neu can test nhanh toan bo bang Docker, uu tien chay script CLI trong trainer container:
 
@@ -193,6 +200,7 @@ Luu y:
 
 - Notebook van co the chay neu tu setup Jupyter trong container, nhung khong can thiet cho flow retrain nhanh.
 - Compose da mount `./data`, `./models`, `./unet_dataset` vao trainer de script chay truc tiep tren du lieu host.
+- Neu ban host trainer tren may local va expose bang `ngrok`, khong can chay trainer container.
 
 Co the override lenh train (vi du train U-Net):
 
@@ -213,7 +221,7 @@ Bien moi truong lien quan trong service `cleanops-ai-scoring-api`:
 - RETRAIN_API_ENABLED=true
 - RETRAIN_API_KEY= (optional, backend gui qua header X-Retrain-Api-Key)
 - RETRAIN_USE_REMOTE_TRAINER=true
-- RETRAIN_TRAINER_BASE_URL=http://cleanops-ai-scoring-trainer:8001
+- RETRAIN_TRAINER_BASE_URL=https://<your-ngrok-domain>
 - RETRAIN_TRAINER_SUBMIT_PATH=/trainer/jobs
 - RETRAIN_TRAINER_API_KEY= (optional, API gui qua header X-Trainer-Api-Key)
 - RETRAIN_TRAINER_TIMEOUT_SEC=7200
@@ -228,7 +236,8 @@ Bien moi truong lien quan trong service `cleanops-ai-scoring-api`:
 
 Luu y:
 
-- Mac dinh compose da bat RETRAIN_USE_REMOTE_TRAINER=true, retrain se duoc goi qua service `cleanops-ai-scoring-trainer`.
+- Mac dinh compose da bat RETRAIN_USE_REMOTE_TRAINER=true, nhung `RETRAIN_TRAINER_BASE_URL` can duoc set ro rang theo moi truong.
+- Voi flow host trainer local + `ngrok`, scoring API trong Docker se goi trainer qua URL `https://<your-ngrok-domain>`.
 - Service trainer chay command train qua bien TRAINER_COMMAND (mac dinh: `python src/train_yolo.py`).
 - Neu tat RETRAIN_USE_REMOTE_TRAINER va RETRAIN_COMMAND de trong, API se fallback candidate da co san tren Blob (neu RETRAIN_ALLOW_EXISTING_BLOB_CANDIDATE=true).
 - De backend promote duoc, can dam bao candidate artifacts ton tai tai prefix `scoring/external/latest` (hoac prefix ban da set).
@@ -346,10 +355,14 @@ Sau khi promote, can restart API roi doi chieu health + hash de xac nhan runtime
 ```powershell
 docker compose restart cleanops-ai-scoring-api
 Invoke-RestMethod -Uri "http://127.0.0.1:8000/" -Method Get | ConvertTo-Json -Depth 20
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/health/live" -Method Get | ConvertTo-Json -Depth 20
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/health/ready" -Method Get | ConvertTo-Json -Depth 20
 ```
 
 Ky vong health:
 
+- `/health/live` tra ve process status.
+- `/health/ready` tra ve 200 khi YOLO/U-Net da load xong va blob config hop le trong strict mode.
 - `yolo_model_source` la `object-storage:downloaded` hoac `object-storage:cache-hit`
 - `unet_model_source` la `object-storage:downloaded` hoac `object-storage:cache-hit`
 - `yolo_model_path`/`unet_model_path` tro den `/app/model-cache/active/...`

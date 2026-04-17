@@ -165,6 +165,51 @@ except Exception as e:
     print(f"Lỗi khởi tạo U-Net: {e}")
 
 
+def build_health_payload() -> Dict[str, Any]:
+    readiness_reasons: List[str] = []
+
+    if model is None:
+        readiness_reasons.append("yolo-model-not-loaded")
+    if unet_model is None:
+        readiness_reasons.append("unet-model-not-loaded")
+
+    if MODEL_REQUIRE_BLOB:
+        if not MODEL_STORAGE.enabled:
+            readiness_reasons.append("blob-storage-disabled-in-strict-mode")
+        if not settings.model_storage_connection_string:
+            readiness_reasons.append("blob-connection-string-missing")
+        if not settings.model_storage_container:
+            readiness_reasons.append("blob-container-missing")
+
+    ready = len(readiness_reasons) == 0
+
+    return {
+        "status": "ready" if ready else "degraded",
+        "live": True,
+        "ready": ready,
+        "readiness_reasons": readiness_reasons,
+        "yolo_loaded": model is not None,
+        "unet_loaded": unet_model is not None,
+        "yolo_model_path": MODEL_PATH,
+        "yolo_model_source": YOLO_MODEL_SOURCE,
+        "unet_model_path": UNET_MODEL_PATH,
+        "unet_model_source": UNET_MODEL_SOURCE,
+        "model_storage_enabled": MODEL_STORAGE.enabled,
+        "model_storage_container": MODEL_STORAGE.container,
+        "model_require_blob": MODEL_REQUIRE_BLOB,
+        "max_batch_images": MAX_BATCH_IMAGES,
+        "pending_lower_bound": PENDING_LOWER_BOUND,
+        "visualize_jpeg_quality": VISUALIZE_JPEG_QUALITY,
+        "visualize_temp_url_ttl_sec": VISUALIZE_TEMP_URL_TTL_SEC,
+        "visualize_temp_max_items": VISUALIZE_TEMP_MAX_ITEMS,
+        "visualization_blob_enabled": settings.visualization_blob_enabled,
+        "visualization_blob_container": settings.visualization_blob_container,
+        "visualization_blob_prefix": settings.visualization_blob_prefix,
+        "env_rules": ENV_RULES,
+        "message": "Welcome to Cleaning AI Hybrid API (YOLO + U-Net)",
+    }
+
+
 
 
 def normalize_env(env: Optional[str]) -> str:
@@ -294,28 +339,22 @@ def build_visualize_blob_payload(
 
 @app.get("/", tags=["production"])
 def health_check():
+    return build_health_payload()
+
+
+@app.get("/health/live", tags=["production"])
+def health_live():
     return {
-        "status": "online",
-        "yolo_loaded": model is not None,
-        "unet_loaded": unet_model is not None,
-        "yolo_model_path": MODEL_PATH,
-        "yolo_model_source": YOLO_MODEL_SOURCE,
-        "unet_model_path": UNET_MODEL_PATH,
-        "unet_model_source": UNET_MODEL_SOURCE,
-        "model_storage_enabled": MODEL_STORAGE.enabled,
-        "model_storage_container": MODEL_STORAGE.container,
-        "model_require_blob": MODEL_REQUIRE_BLOB,
-        "max_batch_images": MAX_BATCH_IMAGES,
-        "pending_lower_bound": PENDING_LOWER_BOUND,
-        "visualize_jpeg_quality": VISUALIZE_JPEG_QUALITY,
-        "visualize_temp_url_ttl_sec": VISUALIZE_TEMP_URL_TTL_SEC,
-        "visualize_temp_max_items": VISUALIZE_TEMP_MAX_ITEMS,
-        "visualization_blob_enabled": settings.visualization_blob_enabled,
-        "visualization_blob_container": settings.visualization_blob_container,
-        "visualization_blob_prefix": settings.visualization_blob_prefix,
-        "env_rules": ENV_RULES,
-        "message": "Welcome to Cleaning AI Hybrid API (YOLO + U-Net)"
+        "status": "live",
+        "live": True,
     }
+
+
+@app.get("/health/ready", tags=["production"])
+def health_ready():
+    payload = build_health_payload()
+    status_code = 200 if payload["ready"] else 503
+    return JSONResponse(status_code=status_code, content=payload)
 
 @app.post("/predict", tags=["production"])
 async def predict_image(file: UploadFile = File(...)):
