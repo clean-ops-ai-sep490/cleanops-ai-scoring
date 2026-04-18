@@ -54,7 +54,6 @@ python src/api/main.py
 - POST /evaluate-url-visualize-json
 - POST /evaluate-visualize-link
 - POST /evaluate-url-visualize-link
-- GET /visualizations/{token}
 
 ### Test
 - POST /predict-url-visualize
@@ -263,16 +262,22 @@ Invoke-RestMethod -Uri "http://localhost:8000/evaluate-url-visualize-json" -Meth
 - Bien moi truong moi: VISUALIZE_JPEG_QUALITY (20-100, mac dinh 92)
 - Gia tri cao hon => anh ro hon, payload base64 lon hon.
 
-Them bien cho temporary URL:
+Them bien cho temporary URL (legacy, khong dung trong flow backend hien tai):
 - VISUALIZE_TEMP_URL_TTL_SEC: thoi gian song cua URL tam (giay), mac dinh 900.
 - VISUALIZE_TEMP_MAX_ITEMS: so anh overlay tam toi da luu trong memory, mac dinh 200.
 - APP_PUBLIC_BASE_URL: base URL public de tao link cho mobile app (vi du https://api-cleanops.example.com).
 
-## 8) Endpoint metadata + temporary URL (khuyen nghi cho mobile)
+Them bien cho blob visualization URL:
+- VISUALIZATION_BLOB_ENABLED: bat/tat upload anh overlay len blob (mac dinh true).
+- VISUALIZATION_BLOB_CONNECTION_STRING: connection string blob storage.
+- VISUALIZATION_BLOB_CONTAINER: ten container luu visualization (mac dinh visualizations).
+- VISUALIZATION_BLOB_PREFIX: prefix path blob (mac dinh scoring/visualizations).
+
+## 8) Endpoint metadata + blob URL (khuyen nghi cho mobile)
 
 Muc tieu:
 - Giam payload so voi base64.
-- Mobile app nhan metadata va 1 link anh tam de tai khi can.
+- Mobile app nhan metadata va 1 public blob URL de tai khi can.
 
 ### 8.1 Upload file
 Endpoint: POST /evaluate-visualize-link
@@ -288,12 +293,9 @@ Response mau (rut gon):
 	"source": "floor_01.jpg",
 	"env": "LOBBY_CORRIDOR",
 	"visualization": {
-		"token": "a1b2c3...",
-		"url": "http://localhost:8000/visualizations/a1b2c3...",
+		"url": "https://<storage-account>.blob.core.windows.net/visualizations/scoring/visualizations/...jpg?<sas>",
 		"mime_type": "image/jpeg",
-		"byte_size": 188232,
-		"ttl_seconds": 900,
-		"expires_at_utc": "2026-04-12T10:10:10.000Z"
+		"byte_size": 188232
 	},
 	"scoring": {},
 	"yolo": {},
@@ -312,9 +314,7 @@ Body JSON:
 }
 ```
 
-### 8.3 Lay anh tu temporary URL
-Endpoint: GET /visualizations/{token}
-
-Luu y:
-- Sau khi het TTL, endpoint nay tra 404.
-- Khong luu file tren o dia; chi luu tam trong memory cua service.
+### 8.3 Luu y
+- Service tra ve blob URL trong truong `visualization.url`.
+- Khong con endpoint GET `/visualizations/{token}` trong API contract hien tai.
+- Backend nen luu va forward `visualizationBlobUrl` cho frontend/mobile.
