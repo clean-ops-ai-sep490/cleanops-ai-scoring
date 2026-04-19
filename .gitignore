@@ -9,6 +9,7 @@ unet_dataset/
 outputs/
 runs/
 model-cache/
+artifacts/models/
 *.pt
 *.pth
 *.ckpt
@@ -49,6 +50,8 @@ temp/
 .env
 .env.*
 !.env.example
+/.azure-cli/
+*.etag
 kaggle.json
 *.pem
 *.key

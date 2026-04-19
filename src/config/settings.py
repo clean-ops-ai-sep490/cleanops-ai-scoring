@@ -188,8 +188,12 @@ class Settings:
     model_storage_container: str
     model_storage_active_yolo_key: str
     model_storage_active_unet_key: str
+    model_storage_active_ppe_key: str
     model_force_refresh: bool
     model_require_blob: bool
+    ppe_enabled: bool
+    ppe_model_path: str
+    ppe_default_min_confidence: float
 
     yolo_conf: float
     max_batch_images: int
@@ -315,8 +319,17 @@ def _build_settings() -> Settings:
         model_storage_container=os.getenv("MODEL_STORAGE_CONTAINER", "models"),
         model_storage_active_yolo_key=os.getenv("MODEL_STORAGE_ACTIVE_YOLO_KEY", "scoring/active/yolo/model.pt"),
         model_storage_active_unet_key=os.getenv("MODEL_STORAGE_ACTIVE_UNET_KEY", "scoring/active/unet/model.pth"),
+        model_storage_active_ppe_key=os.getenv("MODEL_STORAGE_ACTIVE_PPE_KEY", "ppe/active/model.pt"),
         model_force_refresh=_as_bool("MODEL_FORCE_REFRESH", False),
         model_require_blob=_as_bool("MODEL_REQUIRE_BLOB", False),
+        ppe_enabled=_as_bool("PPE_ENABLED", True),
+        ppe_model_path=str(
+            _resolve_path(
+                os.getenv("PPE_MODEL_PATH"),
+                PROJECT_ROOT / "model-cache" / "active" / "ppe" / "model.pt",
+            )
+        ),
+        ppe_default_min_confidence=_as_float("PPE_DEFAULT_MIN_CONFIDENCE", 0.25),
         yolo_conf=_as_float("YOLO_CONF", 0.25),
         max_batch_images=_as_int("MAX_BATCH_IMAGES", 5),
         pending_lower_bound=_as_float("PENDING_LOWER_BOUND", 50.0),
