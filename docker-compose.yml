@@ -8,6 +8,9 @@ services:
     env_file:
       - .env
     environment:
+      - APP_HOST=0.0.0.0
+      - APP_PORT=${APP_PORT:-8000}
+      - APP_RELOAD=false
       - BASE_OUTPUT_DIR=${BASE_OUTPUT_DIR:-/app/outputs}
       - YOLO_TRAIN_PROJECT_DIR=${YOLO_TRAIN_PROJECT_DIR:-/app/outputs/yolo_training_4_4}
       - MODEL_CACHE_DIR=${MODEL_CACHE_DIR:-/app/model-cache}

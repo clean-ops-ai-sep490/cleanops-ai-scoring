@@ -31,8 +31,8 @@ async def get_ppe_labels():
     }
 
 
-@router.post("/ppe/evaluate")
-async def evaluate_ppe(request: PpeEvaluateRequest) -> dict[str, object] | JSONResponse:
+@router.post("/ppe/evaluate", response_model=None)
+async def evaluate_ppe(request: PpeEvaluateRequest):
     unavailable = _require_ppe_model()
     if unavailable:
         return unavailable
