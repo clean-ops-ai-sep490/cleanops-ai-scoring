@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from io import BytesIO
 from typing import Any
@@ -63,21 +64,10 @@ def collect_filtered_detections(
     return detections
 
 
-def detect_from_image_url(
-    image_url: str,
-    model: YOLO,
-    timeout_sec: int,
-    min_confidence: float,
-    image_index: int = 0,
+def summarize_detections(
+    detections: list[DetectionPayload],
+    image_index: int,
 ) -> tuple[dict[str, float], list[DetectionPayload]]:
-    image = load_image_from_url(image_url, timeout_sec)
-    detections = collect_filtered_detections(
-        image=image,
-        model=model,
-        min_confidence=min_confidence,
-        image_index=image_index,
-    )
-
     best_by_name: dict[str, DetectionPayload] = {}
     for detection in detections:
         class_name = str(detection["name"])
@@ -98,12 +88,15 @@ def detect_from_image_url(
     return detected_dict, detected_list
 
 
-def evaluate_ppe_payload(
+async def evaluate_ppe_payload(
     image_urls: list[str],
     required_objects: list[str],
     model: YOLO,
     timeout_sec: int,
     min_confidence: float,
+    llm_filter: Any | None = None,
+    batch_concurrency: int = 2,
+    allowed_labels: list[str] | None = None,
 ) -> dict[str, Any]:
     aggregated_confidences: dict[str, float] = {}
     detected_items: list[dict[str, Any]] = []
@@ -113,32 +106,69 @@ def evaluate_ppe_payload(
         for item in required_objects
         if item and item.strip()
     ]
+    semaphore = asyncio.Semaphore(max(1, batch_concurrency))
 
-    for image_index, image_url in enumerate(image_urls):
+    async def process_image(image_index: int, image_url: str) -> dict[str, Any]:
         try:
-            per_image_confidences, per_image_items = detect_from_image_url(
-                image_url=image_url,
-                model=model,
-                timeout_sec=timeout_sec,
-                min_confidence=min_confidence,
-                image_index=image_index,
-            )
+            async with semaphore:
+                image = await asyncio.to_thread(load_image_from_url, image_url, timeout_sec)
+                detections = await asyncio.to_thread(
+                    collect_filtered_detections,
+                    image,
+                    model,
+                    min_confidence,
+                    image_index,
+                )
+                _, per_image_items = summarize_detections(detections, image_index)
+                if llm_filter is not None:
+                    should_verify, skip_reason = llm_filter.should_verify_ppe(
+                        required_objects=normalized_required_objects,
+                        detected_items=per_image_items,
+                        min_confidence=min_confidence,
+                    )
+                    if should_verify:
+                        per_image_items = await asyncio.to_thread(
+                            llm_filter.refine_ppe_detected_items,
+                            image,
+                            required_objects=normalized_required_objects,
+                            detected_items=per_image_items,
+                            allowed_labels=allowed_labels or [],
+                            min_confidence=min_confidence,
+                            source=f"ppe[{image_index}]",
+                        )
+                    else:
+                        llm_filter.mark_skip("ppe_verification", f"ppe[{image_index}]", skip_reason or "cv_confident")
 
-            for label, confidence in per_image_confidences.items():
-                previous_confidence = aggregated_confidences.get(label)
-                if previous_confidence is None or confidence > previous_confidence:
-                    aggregated_confidences[label] = confidence
-
-            detected_items.extend(per_image_items)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to process PPE image '%s': %s", image_url, exc)
-            failed_images.append(
-                {
+                return {
                     "image_url": image_url,
                     "image_index": image_index,
-                    "error": str(exc),
+                    "detected_items": per_image_items,
                 }
-            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to process PPE image '%s': %s", image_url, exc)
+            return {
+                "image_url": image_url,
+                "image_index": image_index,
+                "error": str(exc),
+            }
+
+    tasks = [process_image(image_index, image_url) for image_index, image_url in enumerate(image_urls)]
+    results = await asyncio.gather(*tasks)
+
+    for result in results:
+        if "error" in result:
+            failed_images.append(result)
+            continue
+
+        per_image_items = result["detected_items"]
+        for item in per_image_items:
+            label = str(item["name"])
+            confidence = float(item["confidence"])
+            previous_confidence = aggregated_confidences.get(label)
+            if previous_confidence is None or confidence > previous_confidence:
+                aggregated_confidences[label] = confidence
+
+        detected_items.extend(per_image_items)
 
     missing_items = [
         required_item
@@ -160,5 +190,38 @@ def evaluate_ppe_payload(
     }
     if failed_images:
         response["failed_images"] = failed_images
+    if llm_filter is not None:
+        metadata_template = llm_filter.response_metadata("ppe[0]", ["ppe_verification"]) if image_urls else {
+            "enabled": getattr(llm_filter, "enabled", False),
+            "configured": getattr(llm_filter, "configured", False),
+            "model": getattr(llm_filter, "model", None),
+            "queue_mode": "disabled",
+            "deadline_sec": 0,
+            "stages": {},
+        }
+        stage_items = []
+        for image_index, _ in enumerate(image_urls):
+            metadata = llm_filter.response_metadata(f"ppe[{image_index}]", ["ppe_verification"])
+            stage = metadata.get("stages", {}).get("ppe_verification")
+            if stage is None:
+                continue
+            stage_items.append(
+                {
+                    "image_index": image_index,
+                    **stage,
+                }
+            )
+        response["llm_filter"] = {
+            "enabled": metadata_template.get("enabled", getattr(llm_filter, "enabled", False)),
+            "configured": metadata_template.get("configured", getattr(llm_filter, "configured", False)),
+            "mode": metadata_template.get("mode"),
+            "model": metadata_template.get("model", getattr(llm_filter, "model", None)),
+            "queue_mode": metadata_template.get("queue_mode", "disabled"),
+            "deadline_sec": metadata_template.get("deadline_sec", 0),
+            "cooldown_active": metadata_template.get("cooldown_active", False),
+            "stages": {
+                "ppe_verification": stage_items,
+            },
+        }
 
     return response

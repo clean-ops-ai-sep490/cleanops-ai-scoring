@@ -67,6 +67,24 @@ def _as_float(name: str, default: float) -> float:
         return default
 
 
+def _as_int_tuple(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    values: list[int] = []
+    for item in raw.split(","):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        try:
+            values.append(int(candidate))
+        except ValueError:
+            continue
+
+    return tuple(values) if values else default
+
+
 def _resolve_path(raw: Optional[str], fallback: Optional[Path] = None) -> Optional[Path]:
     if raw:
         p = Path(raw)
@@ -205,6 +223,27 @@ class Settings:
     visualization_blob_connection_string: str
     visualization_blob_container: str
     visualization_blob_prefix: str
+    llm_filter_enabled: bool
+    llm_filter_mode: str
+    llm_filter_model: str
+    llm_filter_timeout_sec: int
+    llm_filter_batch_concurrency: int
+    llm_filter_queue_enabled: bool
+    llm_filter_queue_mode: str
+    llm_filter_deadline_sec: int
+    llm_filter_429_max_retries: int
+    llm_filter_5xx_max_retries: int
+    llm_filter_cooldown_sec: int
+    llm_filter_enable_borderline_only: bool
+    llm_filter_scoring_pass_window: float
+    llm_filter_ppe_verify_on_missing_only: bool
+    llm_filter_retry_initial_delay_ms: int
+    llm_filter_retry_max_delay_ms: int
+    llm_filter_retryable_status_codes: tuple[int, ...]
+    llm_filter_max_image_dimension: int
+    llm_filter_jpeg_quality: int
+    gemini_api_key: str
+    gemini_base_url: str
 
     kaggle_dataset: str
     roboflow_api_key: Optional[str]
@@ -344,6 +383,32 @@ def _build_settings() -> Settings:
         ),
         visualization_blob_container=os.getenv("VISUALIZATION_BLOB_CONTAINER", "visualizations"),
         visualization_blob_prefix=os.getenv("VISUALIZATION_BLOB_PREFIX", "scoring/visualizations"),
+        llm_filter_enabled=_as_bool("LLM_FILTER_ENABLED", False),
+        llm_filter_mode=(os.getenv("LLM_FILTER_MODE", "quota_saver").strip() or "quota_saver"),
+        llm_filter_model=os.getenv("LLM_FILTER_MODEL", "gemini-2.5-flash-lite"),
+        llm_filter_timeout_sec=_as_int("LLM_FILTER_TIMEOUT_SEC", 8),
+        llm_filter_batch_concurrency=max(1, _as_int("LLM_FILTER_BATCH_CONCURRENCY", 2)),
+        llm_filter_queue_enabled=_as_bool("LLM_FILTER_QUEUE_ENABLED", True),
+        llm_filter_queue_mode=os.getenv("LLM_FILTER_QUEUE_MODE", "global_fifo").strip() or "global_fifo",
+        llm_filter_deadline_sec=max(1, _as_int("LLM_FILTER_DEADLINE_SEC", 15)),
+        llm_filter_429_max_retries=max(0, _as_int("LLM_FILTER_429_MAX_RETRIES", 0)),
+        llm_filter_5xx_max_retries=max(0, _as_int("LLM_FILTER_5XX_MAX_RETRIES", 1)),
+        llm_filter_cooldown_sec=max(10, _as_int("LLM_FILTER_COOLDOWN_SEC", 90)),
+        llm_filter_enable_borderline_only=_as_bool("LLM_FILTER_ENABLE_BORDERLINE_ONLY", True),
+        llm_filter_scoring_pass_window=max(1.0, _as_float("LLM_FILTER_SCORING_PASS_WINDOW", 10.0)),
+        llm_filter_ppe_verify_on_missing_only=_as_bool("LLM_FILTER_PPE_VERIFY_ON_MISSING_ONLY", True),
+        llm_filter_retry_initial_delay_ms=max(100, _as_int("LLM_FILTER_RETRY_INITIAL_DELAY_MS", 1000)),
+        llm_filter_retry_max_delay_ms=max(500, _as_int("LLM_FILTER_RETRY_MAX_DELAY_MS", 8000)),
+        llm_filter_retryable_status_codes=_as_int_tuple(
+            "LLM_FILTER_RETRYABLE_STATUS_CODES",
+            (429, 500, 502, 503, 504),
+        ),
+        llm_filter_max_image_dimension=max(256, min(2048, _as_int("LLM_FILTER_MAX_IMAGE_DIMENSION", 768))),
+        llm_filter_jpeg_quality=max(40, min(95, _as_int("LLM_FILTER_JPEG_QUALITY", 65))),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
+        gemini_base_url=(
+            os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").strip()
+        ),
         kaggle_dataset=os.getenv("KAGGLE_DATASET", "alyyan/trash-detection"),
         roboflow_api_key=os.getenv("ROBOFLOW_API_KEY"),
         roboflow_workspace=os.getenv("ROBOFLOW_WORKSPACE", "compvision-bfglv"),

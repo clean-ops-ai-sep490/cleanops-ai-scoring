@@ -43,23 +43,28 @@ python src/api/main.py
 - Health check: http://127.0.0.1:8000/
 
 ## 3) Danh sach endpoint
-### Production
+### Production chinh thuc
 - GET /
+- POST /evaluate-batch
+- POST /evaluate-url-visualize-link
+- POST /ppe/evaluate
+
+Ghi chu:
+- Backend .NET hien tai chi tieu thu `POST /evaluate-batch`, `POST /evaluate-url-visualize-link`, va `POST /ppe/evaluate`.
+- Route chuan de test tay anh online va lay blob URL overlay la `POST /evaluate-url-visualize-link`.
+
+### Internal/debug only
 - POST /predict
 - POST /predict-url
 - POST /predict-unet
 - POST /predict-unet-url
-- POST /evaluate-batch
-- POST /evaluate-visualize-json
-- POST /evaluate-url-visualize-json
-- POST /evaluate-visualize-link
-- POST /evaluate-url-visualize-link
-
-### Test
 - POST /predict-url-visualize
 - POST /predict-unet-url-visualize
 - POST /evaluate-visualize
 - POST /evaluate-url-visualize
+- POST /evaluate-visualize-json
+- POST /evaluate-url-visualize-json
+- POST /evaluate-visualize-link
 
 ## 4) Cach su dung nhanh
 ### 4.1 Single image upload (YOLO)
@@ -164,6 +169,9 @@ Ket luan:
 
 ## 7) Visual QA endpoint (anh khoanh vung)
 
+Route khuyen nghi duy nhat cho manual testing:
+- `POST /evaluate-url-visualize-link`
+
 Muc tieu:
 - Tra ve truc tiep anh JPEG da duoc ve khoanh vung de team/khach hang xem AI hoat dong dung hay sai.
 - Tren 1 anh se co:
@@ -212,6 +220,10 @@ Invoke-WebRequest -Uri "http://localhost:8000/evaluate-url-visualize" -Method Po
 Muc tieu:
 - Frontend nhan mot JSON duy nhat va render anh truc tiep bang chuoi base64.
 - Khong can luu file tam tren server hay tren may client.
+
+Luu y:
+- Hai route JSON chi nen xem la internal/debug hoac use case dac biet.
+- Flow frontend/mobile/backend uu tien blob URL tu `POST /evaluate-url-visualize-link`.
 
 Endpoint upload: POST /evaluate-visualize-json
 
@@ -273,37 +285,13 @@ Them bien cho blob visualization URL:
 - VISUALIZATION_BLOB_CONTAINER: ten container luu visualization (mac dinh visualizations).
 - VISUALIZATION_BLOB_PREFIX: prefix path blob (mac dinh scoring/visualizations).
 
-## 8) Endpoint metadata + blob URL (khuyen nghi cho mobile)
+## 8) Endpoint metadata + blob URL (khuyen nghi cho mobile va demo)
 
 Muc tieu:
 - Giam payload so voi base64.
 - Mobile app nhan metadata va 1 public blob URL de tai khi can.
 
-### 8.1 Upload file
-Endpoint: POST /evaluate-visualize-link
-
-Form fields:
-- file: anh upload
-- env: tuy chon, mac dinh LOBBY_CORRIDOR
-
-Response mau (rut gon):
-```json
-{
-	"source_type": "upload",
-	"source": "floor_01.jpg",
-	"env": "LOBBY_CORRIDOR",
-	"visualization": {
-		"url": "https://<storage-account>.blob.core.windows.net/visualizations/scoring/visualizations/...jpg?<sas>",
-		"mime_type": "image/jpeg",
-		"byte_size": 188232
-	},
-	"scoring": {},
-	"yolo": {},
-	"unet": {}
-}
-```
-
-### 8.2 URL image
+### 8.1 URL image
 Endpoint: POST /evaluate-url-visualize-link
 
 Body JSON:
@@ -314,7 +302,8 @@ Body JSON:
 }
 ```
 
-### 8.3 Luu y
+### 8.2 Luu y
 - Service tra ve blob URL trong truong `visualization.url`.
 - Khong con endpoint GET `/visualizations/{token}` trong API contract hien tai.
 - Backend nen luu va forward `visualizationBlobUrl` cho frontend/mobile.
+- Route upload `POST /evaluate-visualize-link` duoc giu lai cho noi bo, nhung khong phai route uu tien de test tay.

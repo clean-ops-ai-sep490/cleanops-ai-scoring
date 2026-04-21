@@ -10,13 +10,26 @@ Date: 2026-04-09
 ## 2) Tinh trang chuc nang
 ### API san sang
 - Health check: / (production)
-- YOLO upload: /predict (production)
-- YOLO URL: /predict-url (production)
-- YOLO URL visualize: /predict-url-visualize (test)
-- U-Net upload: /predict-unet (production)
-- U-Net URL: /predict-unet-url (production)
-- U-Net URL visualize: /predict-unet-url-visualize (test)
 - Batch evaluate: /evaluate-batch (production)
+- Visualization blob URL: /evaluate-url-visualize-link (production)
+- PPE evaluate: /ppe/evaluate (production)
+
+### Internal/debug routes
+- /predict
+- /predict-url
+- /predict-unet
+- /predict-unet-url
+- /predict-url-visualize
+- /predict-unet-url-visualize
+- /evaluate-visualize
+- /evaluate-url-visualize
+- /evaluate-visualize-json
+- /evaluate-url-visualize-json
+- /evaluate-visualize-link
+
+Ghi chu:
+- Flow backend hien tai chi can /evaluate-batch, /evaluate-url-visualize-link, va /ppe/evaluate.
+- Route uu tien de test tay va lay visualization blob URL la /evaluate-url-visualize-link.
 
 ### Batch evaluate (cap nhat moi)
 - Gioi han toi da 5 anh/request.
