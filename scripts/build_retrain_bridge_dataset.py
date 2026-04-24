@@ -4,47 +4,57 @@ import argparse
 import hashlib
 import json
 import os
-import re
-import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional
 
 import cv2
 import numpy as np
-import torch
-from azure.storage.blob import BlobClient, BlobContainerClient, BlobServiceClient
-from PIL import Image
+from azure.storage.blob import BlobServiceClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.append(str(PROJECT_ROOT))
-
-from src.models.unet_segmenter import UNetSegmenter
-
-try:
-    from ultralytics import YOLO
-except Exception:  # pragma: no cover
-    YOLO = None
+if TYPE_CHECKING:
+    from azure.storage.blob import BlobClient, BlobContainerClient
 
 
 @dataclass
-class ReviewedItem:
-    request_id: str
+class ApprovedAnnotationItem:
+    candidate_id: str
+    annotation_id: str
     result_id: str
     job_id: str
-    reviewed_verdict: str
-    reviewed_at: Optional[str]
+    request_id: str
+    environment_key: str
+    approved_at_utc: Optional[str]
     snapshot_key: str
     metadata_key: str
+    annotation_key: str
+
+
+YOLO_CLASS_MAP = {
+    "stain_or_water": 0,
+    "stain": 0,
+    "water": 0,
+    "liquid": 0,
+    "wet_surface": 1,
+    "wet": 1,
+}
+
+MASK_CLASS_MAP = {
+    "stain_or_water": 1,
+    "stain": 1,
+    "water": 1,
+    "liquid": 1,
+    "wet_surface": 2,
+    "wet": 2,
+}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Build retrain bridge dataset from reviewed snapshot manifests. "
-            "PASS items become YOLO negative samples and U-Net background masks; FAIL items can be pseudo-labeled."
+            "Build retrain bridge dataset from approved annotation manifests. "
+            "Only human-approved annotations are exported into YOLO/U-Net training artifacts."
         )
     )
     parser.add_argument(
@@ -52,11 +62,11 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("MODEL_STORAGE_CONNECTION_STRING") or os.getenv("SCORING_RETRAIN_STORAGE_CONNECTION_STRING", ""),
         help="Azure Blob connection string (or set MODEL_STORAGE_CONNECTION_STRING)",
     )
-    parser.add_argument("--container", default="retrain-samples", help="Blob container containing reviewed snapshots")
+    parser.add_argument("--container", default="retrain-samples", help="Blob container containing reviewed snapshots and approved annotations")
     parser.add_argument(
         "--prefix",
         default="scoring/retrain-samples",
-        help="Blob prefix root for reviewed snapshots and manifests",
+        help="Blob prefix root for reviewed snapshots and approved annotation manifests",
     )
     parser.add_argument(
         "--output-root",
@@ -65,31 +75,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--valid-ratio", type=float, default=0.1)
-    parser.add_argument("--limit", type=int, default=0, help="Stop after processing N reviewed items (0 = no limit)")
-    parser.add_argument(
-        "--include-fail-unlabeled",
-        action="store_true",
-        help="Export FAIL images into unlabeled buckets when pseudo-labeling is disabled or rejected",
-    )
+    parser.add_argument("--limit", type=int, default=0, help="Stop after processing N approved annotations (0 = no limit)")
     parser.add_argument(
         "--only-after-date",
         default="",
-        help="Only include items with reviewedAt >= YYYY-MM-DD",
+        help="Only include annotations with approvedAtUtc >= YYYY-MM-DD",
     )
-
-    parser.add_argument(
-        "--fail-mode",
-        choices=["pseudo", "unlabeled", "skip"],
-        default="pseudo",
-        help="How FAIL samples are handled",
-    )
-    parser.add_argument("--yolo-weights", default=os.getenv("MODEL_PATH") or os.getenv("YOLO_WEIGHTS_PATH", "yolov8s.pt"))
-    parser.add_argument("--yolo-conf-threshold", type=float, default=0.35)
-    parser.add_argument("--unet-weights", default=os.getenv("UNET_MODEL_PATH", "models/unet_multiclass_best.pth"))
-    parser.add_argument("--unet-img-size", type=int, default=int(os.getenv("UNET_IMG_SIZE", "384")))
-    parser.add_argument("--unet-prob-threshold", type=float, default=0.60)
-    parser.add_argument("--disable-yolo-pseudo", action="store_true")
-    parser.add_argument("--disable-unet-pseudo", action="store_true")
     return parser.parse_args()
 
 
@@ -111,7 +102,7 @@ def safe_stem(text: str) -> str:
     trimmed = text.strip()
     if not trimmed:
         return "item"
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", trimmed)
+    return "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in trimmed)
 
 
 def parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
@@ -134,30 +125,40 @@ def read_json_blob(container: BlobContainerClient, key: str) -> Dict[str, Any]:
     return json.loads(payload.decode("utf-8"))
 
 
+def load_blob_bytes(blob: BlobClient) -> bytes:
+    return blob.download_blob().readall()
+
+
 def list_manifest_keys(container: BlobContainerClient, root_prefix: str) -> Iterable[str]:
-    manifests_prefix = f"{root_prefix}/manifests/reviewed/"
+    manifests_prefix = f"{root_prefix}/manifests/annotations/approved/"
     for blob in container.list_blobs(name_starts_with=manifests_prefix):
         if blob.name.endswith("/manifest.json"):
             yield blob.name
 
 
-def to_reviewed_item(raw: Dict[str, Any]) -> Optional[ReviewedItem]:
-    metadata_key = str(raw.get("metadataKey") or "").strip()
-    snapshot_key = str(raw.get("snapshotKey") or "").strip()
+def to_approved_item(raw: Dict[str, Any]) -> Optional[ApprovedAnnotationItem]:
+    candidate_id = str(raw.get("candidateId") or "").strip()
+    annotation_id = str(raw.get("annotationId") or "").strip()
     result_id = str(raw.get("resultId") or "").strip()
     job_id = str(raw.get("jobId") or "").strip()
+    snapshot_key = str(raw.get("snapshotKey") or "").strip()
+    metadata_key = str(raw.get("metadataKey") or "").strip()
+    annotation_key = str(raw.get("annotationKey") or "").strip()
 
-    if not metadata_key or not snapshot_key or not result_id or not job_id:
+    if not candidate_id or not annotation_id or not result_id or not job_id or not snapshot_key or not metadata_key or not annotation_key:
         return None
 
-    return ReviewedItem(
-        request_id=str(raw.get("requestId") or "").strip(),
+    return ApprovedAnnotationItem(
+        candidate_id=candidate_id,
+        annotation_id=annotation_id,
         result_id=result_id,
         job_id=job_id,
-        reviewed_verdict=str(raw.get("reviewedVerdict") or "").strip().upper(),
-        reviewed_at=str(raw.get("reviewedAt") or "").strip() or None,
+        request_id=str(raw.get("requestId") or "").strip(),
+        environment_key=str(raw.get("environmentKey") or "").strip(),
+        approved_at_utc=str(raw.get("approvedAtUtc") or "").strip() or None,
         snapshot_key=snapshot_key,
         metadata_key=metadata_key,
+        annotation_key=annotation_key,
     )
 
 
@@ -167,13 +168,8 @@ def ensure_layout(root: Path) -> None:
         (root / "yolo" / "labels" / split).mkdir(parents=True, exist_ok=True)
         (root / "unet" / "images" / split).mkdir(parents=True, exist_ok=True)
         (root / "unet" / "masks" / split).mkdir(parents=True, exist_ok=True)
-        (root / "unlabeled" / "fail" / split).mkdir(parents=True, exist_ok=True)
 
     (root / "reports").mkdir(parents=True, exist_ok=True)
-
-
-def load_blob_bytes(blob: BlobClient) -> bytes:
-    return blob.download_blob().readall()
 
 
 def guess_image_extension(snapshot_key: str) -> str:
@@ -183,11 +179,11 @@ def guess_image_extension(snapshot_key: str) -> str:
     return ".jpg"
 
 
-def make_base_name(item: ReviewedItem, reviewed_at: Optional[datetime]) -> str:
-    stamp = reviewed_at.strftime("%Y%m%dT%H%M%SZ") if reviewed_at else "unknown"
+def make_base_name(item: ApprovedAnnotationItem, approved_at: Optional[datetime]) -> str:
+    stamp = approved_at.strftime("%Y%m%dT%H%M%SZ") if approved_at else "unknown"
     result_part = safe_stem(item.result_id)[:16]
-    job_part = safe_stem(item.job_id)[:12]
-    return f"rv_{stamp}_{job_part}_{result_part}"
+    candidate_part = safe_stem(item.candidate_id)[:12]
+    return f"ann_{stamp}_{candidate_part}_{result_part}"
 
 
 def write_binary(path: Path, content: bytes) -> None:
@@ -200,41 +196,68 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def load_yolo_model(weights_path: str):
-    if YOLO is None:
-        raise RuntimeError("ultralytics is not installed in this environment")
-    return YOLO(weights_path)
+def decode_image_shape(image_bytes: bytes) -> tuple[int, int]:
+    decoded = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        raise ValueError("Failed to decode snapshot image bytes")
+    h, w = decoded.shape[:2]
+    return h, w
 
 
-def load_unet_model(weights_path: str, device: torch.device) -> UNetSegmenter:
-    ckpt_path = Path(weights_path)
-    if not ckpt_path.is_absolute():
-        ckpt_path = (PROJECT_ROOT / ckpt_path).resolve()
+def normalize_label(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
 
-    if not ckpt_path.exists():
-        raise FileNotFoundError(f"U-Net checkpoint not found: {ckpt_path}")
-
-    ckpt = torch.load(ckpt_path, map_location=device)
-    encoder = "resnet50"
-    if isinstance(ckpt, dict):
-        encoder = str(ckpt.get("encoder", "resnet50"))
-
-    model = UNetSegmenter(encoder_name=encoder, classes=3).to(device)
-    if isinstance(ckpt, dict) and "model_state" in ckpt:
-        model.load_state_dict(ckpt["model_state"])
-    else:
-        model.load_state_dict(ckpt)
-    model.eval()
-    return model
+    label = str(raw).strip().lower()
+    return label if label in YOLO_CLASS_MAP else None
 
 
-def pil_from_bytes(image_bytes: bytes) -> Image.Image:
-    arr = np.frombuffer(image_bytes, dtype=np.uint8)
-    bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if bgr is None:
-        raise ValueError("Unable to decode image bytes")
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    return Image.fromarray(rgb)
+def normalize_shape_type(raw: Any) -> str:
+    value = str(raw or "rectangle").strip().lower()
+    if value in {"rectangle", "rect", "bbox", "box"}:
+        return "rectangle"
+    if value in {"polygon", "region", "polygon-region"}:
+        return "polygon"
+    return "rectangle"
+
+
+def parse_points(raw_points: Any) -> list[tuple[float, float]]:
+    points: list[tuple[float, float]] = []
+    if not isinstance(raw_points, list):
+        return points
+
+    for item in raw_points:
+        if not isinstance(item, list) or len(item) < 2:
+            continue
+
+        try:
+            x = float(item[0])
+            y = float(item[1])
+        except (TypeError, ValueError):
+            continue
+
+        points.append((x, y))
+
+    return points
+
+
+def clamp_point(x: float, y: float, width: int, height: int) -> tuple[int, int]:
+    px = int(round(max(0.0, min(float(width - 1), x))))
+    py = int(round(max(0.0, min(float(height - 1), y))))
+    return px, py
+
+
+def points_to_bbox(points: list[tuple[float, float]], width: int, height: int) -> Optional[tuple[int, int, int, int]]:
+    if len(points) < 2:
+        return None
+
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    x1, y1 = clamp_point(min(xs), min(ys), width, height)
+    x2, y2 = clamp_point(max(xs), max(ys), width, height)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return x1, y1, x2, y2
 
 
 def to_yolo_line(class_id: int, x1: float, y1: float, x2: float, y2: float, width: int, height: int) -> str:
@@ -250,123 +273,95 @@ def to_yolo_line(class_id: int, x1: float, y1: float, x2: float, y2: float, widt
     return f"{class_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}"
 
 
-def pseudo_yolo_label(model, image: Image.Image, conf_threshold: float) -> str:
-    results = model.predict(source=image, conf=conf_threshold, save=False, verbose=False)
+def annotation_to_yolo_lines(labels: list[dict[str, Any]], width: int, height: int) -> list[str]:
     lines: list[str] = []
-
-    width, height = image.size
-    for result in results:
-        boxes = result.boxes
-        if boxes is None:
+    for label_item in labels:
+        normalized_label = normalize_label(label_item.get("label"))
+        if normalized_label is None:
             continue
-        for box in boxes:
-            conf = float(box.conf[0].item())
-            if conf < conf_threshold:
-                continue
-            cls_id = int(box.cls[0].item())
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-            lines.append(to_yolo_line(cls_id, x1, y1, x2, y2, width, height))
 
-    return "\n".join(lines)
+        points = parse_points(label_item.get("points"))
+        bbox = points_to_bbox(points, width, height)
+        if bbox is None:
+            continue
 
+        x1, y1, x2, y2 = bbox
+        lines.append(to_yolo_line(YOLO_CLASS_MAP[normalized_label], x1, y1, x2, y2, width, height))
 
-def pseudo_unet_mask(
-    model: UNetSegmenter,
-    image: Image.Image,
-    img_size: int,
-    prob_threshold: float,
-    device: torch.device,
-) -> Optional[np.ndarray]:
-    rgb = np.array(image.convert("RGB"))
-    h, w = rgb.shape[:2]
-
-    resized = cv2.resize(rgb, (img_size, img_size), interpolation=cv2.INTER_LINEAR)
-    x = resized.astype(np.float32) / 255.0
-    x = np.transpose(x, (2, 0, 1))
-    x_tensor = torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        logits = model(x_tensor)
-        probs = torch.softmax(logits, dim=1)
-        max_probs, pred = torch.max(probs, dim=1)
-
-    mean_prob = float(max_probs.mean().item())
-    if mean_prob < prob_threshold:
-        return None
-
-    pred_np = pred.squeeze(0).cpu().numpy().astype(np.uint8)
-    pred_original = cv2.resize(pred_np, (w, h), interpolation=cv2.INTER_NEAREST)
-    return pred_original
+    return lines
 
 
-def export_pass_item(root: Path, split: str, base_name: str, ext: str, image_bytes: bytes) -> tuple[Path, Path, Path, Path]:
-    yolo_image_path = root / "yolo" / "images" / split / f"{base_name}{ext}"
-    yolo_label_path = root / "yolo" / "labels" / split / f"{base_name}.txt"
+def draw_shape(mask: np.ndarray, shape_type: str, points: list[tuple[float, float]], class_id: int) -> None:
+    height, width = mask.shape[:2]
+    if shape_type == "rectangle":
+        bbox = points_to_bbox(points, width, height)
+        if bbox is None:
+            return
+        x1, y1, x2, y2 = bbox
+        mask[y1:y2, x1:x2] = class_id
+        return
 
-    unet_image_path = root / "unet" / "images" / split / f"{base_name}{ext}"
-    unet_mask_path = root / "unet" / "masks" / split / f"{base_name}.png"
+    if len(points) < 3:
+        return
 
-    write_binary(yolo_image_path, image_bytes)
-    write_text(yolo_label_path, "")
-
-    write_binary(unet_image_path, image_bytes)
-
-    decoded = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if decoded is None:
-        raise ValueError("Failed to decode snapshot image bytes")
-
-    h, w = decoded.shape[:2]
-    bg_mask = np.zeros((h, w), dtype=np.uint8)
-    ok = cv2.imwrite(str(unet_mask_path), bg_mask)
-    if not ok:
-        raise ValueError(f"Failed to write mask file: {unet_mask_path}")
-
-    return yolo_image_path, yolo_label_path, unet_image_path, unet_mask_path
+    polygon = np.array([clamp_point(x, y, width, height) for x, y in points], dtype=np.int32)
+    if polygon.size == 0:
+        return
+    cv2.fillPoly(mask, [polygon], color=class_id)
 
 
-def export_fail_item(root: Path, split: str, base_name: str, ext: str, image_bytes: bytes, metadata: Dict[str, Any]) -> tuple[Path, Path]:
-    fail_image_path = root / "unlabeled" / "fail" / split / f"{base_name}{ext}"
-    fail_meta_path = root / "unlabeled" / "fail" / split / f"{base_name}.metadata.json"
+def annotation_to_mask(labels: list[dict[str, Any]], width: int, height: int) -> np.ndarray:
+    mask = np.zeros((height, width), dtype=np.uint8)
+    wet_items: list[tuple[str, list[tuple[float, float]], int]] = []
+    stain_items: list[tuple[str, list[tuple[float, float]], int]] = []
 
-    write_binary(fail_image_path, image_bytes)
-    write_text(fail_meta_path, json.dumps(metadata, ensure_ascii=True, indent=2))
+    for label_item in labels:
+        normalized_label = normalize_label(label_item.get("label"))
+        if normalized_label is None:
+            continue
 
-    return fail_image_path, fail_meta_path
+        points = parse_points(label_item.get("points"))
+        shape_type = normalize_shape_type(label_item.get("shapeType"))
+        class_id = MASK_CLASS_MAP[normalized_label]
+        target = stain_items if class_id == 1 else wet_items
+        target.append((shape_type, points, class_id))
+
+    for shape_type, points, class_id in wet_items:
+        draw_shape(mask, shape_type, points, class_id)
+    for shape_type, points, class_id in stain_items:
+        draw_shape(mask, shape_type, points, class_id)
+
+    return mask
 
 
-def export_fail_pseudo_item(
+def export_approved_annotation(
     root: Path,
     split: str,
     base_name: str,
     ext: str,
     image_bytes: bytes,
-    yolo_label_text: str,
-    unet_mask: Optional[np.ndarray],
-) -> Dict[str, str]:
+    yolo_lines: list[str],
+    mask: np.ndarray,
+) -> dict[str, str]:
     yolo_image_path = root / "yolo" / "images" / split / f"{base_name}{ext}"
     yolo_label_path = root / "yolo" / "labels" / split / f"{base_name}.txt"
+    unet_image_path = root / "unet" / "images" / split / f"{base_name}{ext}"
+    unet_mask_path = root / "unet" / "masks" / split / f"{base_name}.png"
 
     write_binary(yolo_image_path, image_bytes)
-    write_text(yolo_label_path, yolo_label_text)
+    write_text(yolo_label_path, "\n".join(yolo_lines))
+    write_binary(unet_image_path, image_bytes)
 
-    out = {
+    ok = cv2.imwrite(str(unet_mask_path), mask)
+    if not ok:
+        raise ValueError(f"Failed to write mask file: {unet_mask_path}")
+
+    return {
         "yoloImage": str(yolo_image_path),
         "yoloLabel": str(yolo_label_path),
+        "unetImage": str(unet_image_path),
+        "unetMask": str(unet_mask_path),
     }
-
-    if unet_mask is not None:
-        unet_image_path = root / "unet" / "images" / split / f"{base_name}{ext}"
-        unet_mask_path = root / "unet" / "masks" / split / f"{base_name}.png"
-
-        write_binary(unet_image_path, image_bytes)
-        ok = cv2.imwrite(str(unet_mask_path), unet_mask)
-        if not ok:
-            raise ValueError(f"Failed to write pseudo U-Net mask: {unet_mask_path}")
-
-        out["unetImage"] = str(unet_image_path)
-        out["unetMask"] = str(unet_mask_path)
-
-    return out
 
 
 def main() -> None:
@@ -392,37 +387,14 @@ def main() -> None:
 
     service = BlobServiceClient.from_connection_string(args.connection_string)
     container = service.get_container_client(args.container)
-
     root_prefix = normalize_prefix(args.prefix)
 
     processed = 0
+    exported = 0
     skipped = 0
-    exported_pass = 0
-    exported_fail = 0
-    exported_fail_pseudo = 0
-    skipped_hard_fail = 0
     errors = 0
+    empty_label_items = 0
     dedupe_keys: set[str] = set()
-
-    yolo_model = None
-    unet_model = None
-    unet_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    pseudo_enabled = args.fail_mode == "pseudo"
-    yolo_pseudo_enabled = pseudo_enabled and not args.disable_yolo_pseudo
-    unet_pseudo_enabled = pseudo_enabled and not args.disable_unet_pseudo
-
-    if yolo_pseudo_enabled:
-        yolo_model = load_yolo_model(args.yolo_weights)
-
-    if unet_pseudo_enabled:
-        try:
-            unet_model = load_unet_model(args.unet_weights, unet_device)
-        except FileNotFoundError:
-            # Keep FAIL pseudo-labeling active for YOLO even if U-Net checkpoint is missing.
-            unet_model = None
-            unet_pseudo_enabled = False
-
     index_lines = []
 
     for manifest_key in list_manifest_keys(container, root_prefix):
@@ -436,19 +408,19 @@ def main() -> None:
                 skipped += 1
                 continue
 
-            item = to_reviewed_item(raw_item)
+            item = to_approved_item(raw_item)
             if item is None:
                 skipped += 1
                 continue
 
-            if item.metadata_key in dedupe_keys:
+            if item.annotation_key in dedupe_keys:
                 skipped += 1
                 continue
-            dedupe_keys.add(item.metadata_key)
+            dedupe_keys.add(item.annotation_key)
 
-            reviewed_at_dt = parse_iso_datetime(item.reviewed_at)
-            if only_after is not None and reviewed_at_dt is not None:
-                if reviewed_at_dt.replace(tzinfo=None) < only_after:
+            approved_at_dt = parse_iso_datetime(item.approved_at_utc)
+            if only_after is not None and approved_at_dt is not None:
+                if approved_at_dt.replace(tzinfo=None) < only_after:
                     skipped += 1
                     continue
 
@@ -458,152 +430,63 @@ def main() -> None:
             processed += 1
 
             try:
+                annotation_json = read_json_blob(container, item.annotation_key)
+                labels = annotation_json.get("annotation", {}).get("labels", [])
+                if not isinstance(labels, list):
+                    raise ValueError("annotation.labels must be a JSON array")
+
                 metadata_json = read_json_blob(container, item.metadata_key)
-                verdict = str(
-                    metadata_json.get("reviewedVerdict")
-                    or item.reviewed_verdict
-                    or ""
-                ).strip().upper()
-
-                split_seed = item.result_id or item.metadata_key
-                split = choose_split(split_seed, args.train_ratio, args.valid_ratio)
-
                 snapshot_blob = container.get_blob_client(item.snapshot_key)
                 snapshot_bytes = load_blob_bytes(snapshot_blob)
+                height, width = decode_image_shape(snapshot_bytes)
 
                 ext = guess_image_extension(item.snapshot_key)
-                base_name = make_base_name(item, reviewed_at_dt)
+                base_name = make_base_name(item, approved_at_dt)
+                split_seed = item.candidate_id or item.annotation_id or item.result_id
+                split = choose_split(split_seed, args.train_ratio, args.valid_ratio)
 
-                if verdict == "PASS":
-                    yolo_image_path, yolo_label_path, unet_image_path, unet_mask_path = export_pass_item(
-                        output_root,
-                        split,
-                        base_name,
-                        ext,
-                        snapshot_bytes,
-                    )
-                    exported_pass += 1
-                    index_lines.append(
-                        {
-                            "resultId": item.result_id,
-                            "jobId": item.job_id,
-                            "requestId": item.request_id,
-                            "verdict": verdict,
-                            "split": split,
-                            "snapshotKey": item.snapshot_key,
-                            "metadataKey": item.metadata_key,
-                            "yoloImage": str(yolo_image_path),
-                            "yoloLabel": str(yolo_label_path),
-                            "unetImage": str(unet_image_path),
-                            "unetMask": str(unet_mask_path),
-                        }
-                    )
-                elif verdict == "FAIL":
-                    if args.fail_mode == "unlabeled":
-                        fail_image_path, fail_meta_path = export_fail_item(
-                            output_root,
-                            split,
-                            base_name,
-                            ext,
-                            snapshot_bytes,
-                            metadata_json,
-                        )
-                        exported_fail += 1
-                        index_lines.append(
-                            {
-                                "resultId": item.result_id,
-                                "jobId": item.job_id,
-                                "requestId": item.request_id,
-                                "verdict": verdict,
-                                "split": split,
-                                "snapshotKey": item.snapshot_key,
-                                "metadataKey": item.metadata_key,
-                                "unlabeledFailImage": str(fail_image_path),
-                                "unlabeledFailMetadata": str(fail_meta_path),
-                            }
-                        )
-                    elif args.fail_mode == "pseudo":
-                        image = pil_from_bytes(snapshot_bytes)
+                yolo_lines = annotation_to_yolo_lines(labels, width, height)
+                if not yolo_lines:
+                    empty_label_items += 1
+                mask = annotation_to_mask(labels, width, height)
 
-                        yolo_label_text = ""
-                        if yolo_model is not None:
-                            yolo_label_text = pseudo_yolo_label(
-                                yolo_model,
-                                image,
-                                args.yolo_conf_threshold,
-                            )
+                exported_paths = export_approved_annotation(
+                    output_root,
+                    split,
+                    base_name,
+                    ext,
+                    snapshot_bytes,
+                    yolo_lines,
+                    mask,
+                )
+                exported += 1
 
-                        unet_mask = None
-                        if unet_model is not None and unet_pseudo_enabled:
-                            unet_mask = pseudo_unet_mask(
-                                unet_model,
-                                image,
-                                args.unet_img_size,
-                                args.unet_prob_threshold,
-                                unet_device,
-                            )
-
-                        if yolo_model is None and unet_mask is None:
-                            if args.include_fail_unlabeled:
-                                fail_image_path, fail_meta_path = export_fail_item(
-                                    output_root,
-                                    split,
-                                    base_name,
-                                    ext,
-                                    snapshot_bytes,
-                                    metadata_json,
-                                )
-                                exported_fail += 1
-                                index_lines.append(
-                                    {
-                                        "resultId": item.result_id,
-                                        "jobId": item.job_id,
-                                        "requestId": item.request_id,
-                                        "verdict": verdict,
-                                        "split": split,
-                                        "snapshotKey": item.snapshot_key,
-                                        "metadataKey": item.metadata_key,
-                                        "unlabeledFailImage": str(fail_image_path),
-                                        "unlabeledFailMetadata": str(fail_meta_path),
-                                        "reason": "pseudo-label-not-available",
-                                    }
-                                )
-                            else:
-                                skipped_hard_fail += 1
-                        else:
-                            exported = export_fail_pseudo_item(
-                                output_root,
-                                split,
-                                base_name,
-                                ext,
-                                snapshot_bytes,
-                                yolo_label_text,
-                                unet_mask,
-                            )
-                            exported_fail_pseudo += 1
-                            index_lines.append(
-                                {
-                                    "resultId": item.result_id,
-                                    "jobId": item.job_id,
-                                    "requestId": item.request_id,
-                                    "verdict": verdict,
-                                    "split": split,
-                                    "snapshotKey": item.snapshot_key,
-                                    "metadataKey": item.metadata_key,
-                                    "mode": "pseudo",
-                                    **exported,
-                                }
-                            )
-                    else:
-                        skipped_hard_fail += 1
-                else:
-                    skipped += 1
+                index_lines.append(
+                    {
+                        "candidateId": item.candidate_id,
+                        "annotationId": item.annotation_id,
+                        "resultId": item.result_id,
+                        "jobId": item.job_id,
+                        "requestId": item.request_id,
+                        "environmentKey": item.environment_key,
+                        "split": split,
+                        "snapshotKey": item.snapshot_key,
+                        "metadataKey": item.metadata_key,
+                        "annotationKey": item.annotation_key,
+                        "approvedAtUtc": item.approved_at_utc,
+                        "reviewedVerdict": metadata_json.get("reviewedVerdict"),
+                        "exportedLabelCount": len(yolo_lines),
+                        **exported_paths,
+                    }
+                )
             except Exception as exc:  # noqa: BLE001
                 errors += 1
                 index_lines.append(
                     {
+                        "candidateId": item.candidate_id,
+                        "annotationId": item.annotation_id,
                         "resultId": item.result_id,
-                        "metadataKey": item.metadata_key,
+                        "annotationKey": item.annotation_key,
                         "snapshotKey": item.snapshot_key,
                         "error": f"{type(exc).__name__}: {exc}",
                     }
@@ -622,18 +505,15 @@ def main() -> None:
         "valid_ratio": args.valid_ratio,
         "only_after_date": args.only_after_date or None,
         "processed_items": processed,
-        "exported_pass_items": exported_pass,
-        "exported_fail_unlabeled_items": exported_fail,
-        "exported_fail_pseudo_items": exported_fail_pseudo,
-        "skipped_hard_fail_items": skipped_hard_fail,
+        "exported_annotation_items": exported,
+        "empty_label_items": empty_label_items,
         "skipped_items": skipped,
         "error_items": errors,
-        "fail_mode": args.fail_mode,
         "notes": [
-            "PASS items are exported as YOLO negative samples (empty label files).",
-            "PASS items are exported as U-Net background masks (all pixels = class 0).",
-            "FAIL items can be pseudo-labeled by current YOLO/U-Net models when fail-mode=pseudo.",
-            "Hard FAIL samples can be skipped or exported unlabeled based on settings.",
+            "Only approved human annotations are exported to the deep retrain dataset.",
+            "Reviewed PASS/FAIL items without approved annotations are not treated as perception ground truth here.",
+            "YOLO labels are derived from annotation regions using bounding rectangles.",
+            "U-Net masks are rasterized from the same approved annotation regions.",
         ],
     }
 
