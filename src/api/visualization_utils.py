@@ -229,15 +229,14 @@ def render_hybrid_overlay(
 
     dirty_region_candidates = dirty_region_candidates or []
     visual_review = visual_review or {}
-    keep_indexes = {
+    penalty_detection_indexes = {
         idx
-        for idx in visual_review.get("keep_detection_indexes", [])
+        for idx in scoring.get("penalty_detection_indexes", [])
         if isinstance(idx, int)
     }
-    draw_filtered_detections = bool(keep_indexes)
-    advisory_object_boxes = [
-        item for item in visual_review.get("advisory_object_boxes", []) if isinstance(item, dict)
-    ]
+    # Production visualization should only draw object boxes that affect scoring.
+    # Object advisory boxes are ignored here unless they become YOLO results and penalty indexes.
+    advisory_object_boxes: list[Dict[str, Any]] = []
     advisory_dirty_boxes = [
         item for item in visual_review.get("advisory_dirty_boxes", []) if isinstance(item, dict)
     ]
@@ -253,7 +252,7 @@ def render_hybrid_overlay(
     }
 
     for idx, item in enumerate(yolo_result.get("results", [])):
-        if draw_filtered_detections and idx not in keep_indexes:
+        if idx not in penalty_detection_indexes:
             continue
         x1, y1, x2, y2 = [int(v) for v in item.get("bbox", [0, 0, 0, 0])]
         class_name = str(item.get("class_name", "obj"))
@@ -334,10 +333,11 @@ def render_hybrid_overlay(
         f"VERDICT: {verdict}",
         f"QUALITY SCORE: {float(scoring.get('quality_score', 0.0)):.2f}",
         f"DIRTY COVERAGE: {float(100.0 - float(scoring.get('base_clean_score', 0.0))):.2f}%",
-        f"YOLO DETECTIONS: {int(yolo_result.get('detections_count', 0))}",
+        f"PENALTY OBJECTS: {int(scoring.get('penalty_detections_count', 0))}",
     ]
     optional_lines: list[str] = []
     if not compact_mode:
+        optional_lines.append(f"OBJECT PENALTY: {float(scoring.get('object_penalty', 0.0)):.2f}")
         optional_lines.append(f"ENV: {env_key}")
     if (highlight_region_ids or advisory_object_boxes or advisory_dirty_boxes) and not compact_mode:
         optional_lines.append("AI REVIEWED OVERLAY")
@@ -419,7 +419,7 @@ def render_hybrid_overlay(
     legend_items = [
         ((30, 30, 220), "Dirty area"),
         ((220, 200, 30), "Wet surface"),
-        ((60, 200, 20), "Objects"),
+        ((60, 200, 20), "Trash-like objects"),
     ]
     legend_required_height = len(legend_items) * (legend_box_size + (legend_gap // 2))
     show_legend = not compact_mode and (height - panel_y2 - panel_margin) >= legend_required_height

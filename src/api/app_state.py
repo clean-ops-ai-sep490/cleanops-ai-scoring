@@ -21,6 +21,7 @@ from src.api.llm_filter import GeminiFilterConfig, GeminiLLMFilter
 from src.api.scoring_utils import normalize_env as normalize_env_impl
 from src.api.scoring_utils import parse_url_items as parse_url_items_impl
 from src.api.scoring_utils import score_image as score_image_impl
+from src.api.scoring_utils import summarize_penalty_detections as summarize_penalty_detections_impl
 from src.api.visualization_utils import (
     build_visualize_blob_url_payload as build_visualize_blob_url_payload_impl,
     build_visualize_json_payload as build_visualize_json_payload_impl,
@@ -51,6 +52,8 @@ CLASS_MAP = {
 ENV_RULES = get_env_rules()
 MAX_BATCH_IMAGES = settings.max_batch_images
 PENDING_LOWER_BOUND = settings.pending_lower_bound
+SCORING_PENALTY_LABELS = settings.scoring_penalty_labels
+SCORING_OBJECT_PENALTY_PER_DETECTION = max(0.0, settings.scoring_object_penalty_per_detection)
 YOLO_CONF = settings.yolo_conf
 REQUEST_TIMEOUT_SEC = settings.request_timeout_sec
 VISUALIZE_JPEG_QUALITY = max(20, min(100, settings.visualize_jpeg_quality))
@@ -299,6 +302,8 @@ def build_health_payload() -> Dict[str, Any]:
         "model_require_blob": MODEL_REQUIRE_BLOB,
         "max_batch_images": MAX_BATCH_IMAGES,
         "pending_lower_bound": PENDING_LOWER_BOUND,
+        "scoring_penalty_labels": list(SCORING_PENALTY_LABELS),
+        "scoring_object_penalty_per_detection": SCORING_OBJECT_PENALTY_PER_DETECTION,
         "visualize_jpeg_quality": VISUALIZE_JPEG_QUALITY,
         "visualize_temp_url_ttl_sec": VISUALIZE_TEMP_URL_TTL_SEC,
         "visualize_temp_max_items": VISUALIZE_TEMP_MAX_ITEMS,
@@ -465,6 +470,8 @@ def evaluate_image_with_artifacts(
         class_map=CLASS_MAP,
         env_rules=ENV_RULES,
         pending_lower_bound=PENDING_LOWER_BOUND,
+        scoring_penalty_labels=SCORING_PENALTY_LABELS,
+        scoring_object_penalty_per_detection=SCORING_OBJECT_PENALTY_PER_DETECTION,
     )
     dirty_region_candidates = extract_dirty_region_candidates_impl(raw_unet_result["mask_original_size"])
     verified_bundle = LLM_FILTER.verify_scoring_evidence(
@@ -483,12 +490,18 @@ def evaluate_image_with_artifacts(
     verified_yolo = verified_bundle["yolo"]
     raw_unet_result["summary"] = verified_bundle["summary"]
 
+    penalty_summary = summarize_penalty_detections_impl(
+        verified_yolo.get("results", []),
+        SCORING_PENALTY_LABELS,
+    )
     recomputed_scoring = score_image_impl(
         total_dirty_coverage_pct=raw_unet_result["summary"]["total_dirty_coverage_pct"],
         detections_count=verified_yolo["detections_count"],
         env_key=env_key,
         env_rules=ENV_RULES,
         pending_lower_bound=PENDING_LOWER_BOUND,
+        object_penalty_per_detection=SCORING_OBJECT_PENALTY_PER_DETECTION,
+        **penalty_summary,
     )
     recomputed_scoring["reasons"] = _merge_reasons(
         recomputed_scoring.get("reasons", []),

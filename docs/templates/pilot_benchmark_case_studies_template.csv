@@ -1,0 +1,9 @@
+case_id,image_id,environment_key,expected_verdict,predicted_verdict,quality_score,case_type,visualization_path_or_url,short_analysis
+case_01,scoring_01,LOBBY_CORRIDOR,PASS,,,clean_pass_candidate,,clean marble-like floor with no visible debris or wet regions
+case_02,scoring_04,LOBBY_CORRIDOR,PENDING,,,pending_wet_surface_candidate,,floor is being mopped so a supervisor may keep it pending because the surface is still wet
+case_03,scoring_07,RESTROOM,PASS,,,restroom_pass_candidate,,restroom floor appears clean and dry
+case_04,scoring_08,RESTROOM,FAIL,,,surface_dirty_fail_candidate,,tile close-up shows dirty grout without requiring large object detection
+case_05,scoring_10,RESTROOM,FAIL,,,heavy_debris_fail_candidate,,restroom contains obvious trash and strong signs of neglect
+case_06,scoring_12,OUTDOOR_LANDSCAPE,FAIL,,,outdoor_debris_fail_candidate,,outdoor ground is heavily covered by leaves and should not pass
+case_07,scoring_13,LOBBY_CORRIDOR,FAIL,,,construction_residue_fail_candidate,,construction tools and residue create a clear fail case
+case_08,scoring_18,LOBBY_CORRIDOR,PENDING,,,ongoing_cleaning_candidate,,active mopping makes this a useful borderline pending example

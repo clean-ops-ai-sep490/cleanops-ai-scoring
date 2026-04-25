@@ -46,6 +46,22 @@ tmp/
 temp/
 *.tmp
 
+# --- Local report generation helpers/artifacts ---
+docs/_benchmark_review/
+report_pack*/
+*.docx
+scripts/check_and_fix_report_metrics.py
+scripts/enrich_final_report_docx.py
+scripts/export_report_charts.py
+scripts/insert_report_figures_docx.py
+scripts/make_report_concise.py
+scripts/patch_raw_report_docx.py
+scripts/refresh_complete_report_docx.py
+scripts/run_ppe_pilot_direct_inference.py
+scripts/run_ppe_pilot_service_benchmark.py
+scripts/run_scoring_pilot_direct_inference.py
+scripts/run_scoring_pilot_visual_benchmark.py
+
 # --- API & Secrets ---
 .env
 .env.*

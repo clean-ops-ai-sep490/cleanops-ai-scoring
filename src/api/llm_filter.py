@@ -21,7 +21,8 @@ YOLO_VERIFY_SYSTEM_PROMPT = (
     "You are an image-quality observer that verifies computer-vision detections.\n"
     "Your role is to improve reliability, not to invent new labels or new scoring rules.\n"
     "You must follow the provided label whitelist exactly.\n"
-    "If a detection is actually furniture, background, or scene structure, reject it.\n"
+    "Keep only visible trash-like cleanliness evidence such as metal, paper, plastic, trash, marks, debris, or waste.\n"
+    "If a detection is actually a toilet, sink, fixture, furniture, background, floor pattern, or scene structure, reject it.\n"
     "Return strict JSON only."
 )
 
@@ -44,7 +45,8 @@ SCORING_VERIFY_SYSTEM_PROMPT = (
     "You are a quota-aware image-quality observer that verifies computer-vision evidence for cleanliness scoring.\n"
     "You must improve reliability without inventing new scoring rules.\n"
     "Use the provided YOLO label whitelist and dirty-region candidates as grounding.\n"
-    "Reject detections that are actually furniture, background, or scene structure.\n"
+    "Keep only visible trash-like cleanliness evidence such as metal, paper, plastic, trash, marks, debris, or waste.\n"
+    "Reject detections that are actually a toilet, sink, fixture, furniture, background, floor pattern, or scene structure.\n"
     "Only return the minimal JSON fields requested.\n"
     "Do not include markdown, explanations, comments, or extra keys.\n"
     "Return strict JSON only."
@@ -429,7 +431,8 @@ class GeminiLLMFilter:
                 '"advisory_dirty_boxes":[],"overlay_summary":"","reasons":[],"confidence_note":""}\n'
                 "Rules:\n"
                 "- Keep only detections that clearly match allowed labels.\n"
-                "- Reject furniture, architecture, and background false positives.\n"
+                "- Keep only visible trash-like cleanliness evidence: metal, paper, plastic, trash, marks, debris, or waste.\n"
+                "- Reject toilet, sink, fixture, furniture, architecture, floor pattern, and background false positives.\n"
                 "- highlight_dirty_region_ids must only reference provided region IDs.\n"
                 "- stain_delta_pct and wet_delta_pct must be small guarded corrections, usually between -5 and 5.\n"
                 "- You may add at most 2 advisory dirty boxes only when the image visibly supports them.\n"
@@ -446,7 +449,8 @@ class GeminiLLMFilter:
                 '{"verified_detection_indexes":[],"highlight_dirty_region_ids":[],"stain_delta_pct":0.0,"wet_delta_pct":0.0,"reasons":[],"confidence_note":""}\n'
                 "Rules:\n"
                 "- Keep only detections that clearly match allowed labels.\n"
-                "- Reject furniture, architecture, and background false positives.\n"
+                "- Keep only visible trash-like cleanliness evidence: metal, paper, plastic, trash, marks, debris, or waste.\n"
+                "- Reject toilet, sink, fixture, furniture, architecture, floor pattern, and background false positives.\n"
                 "- highlight_dirty_region_ids must only reference provided region IDs.\n"
                 "- stain_delta_pct and wet_delta_pct must be small corrections, usually between -5 and 5.\n"
                 "- If unsure, return empty arrays and zero deltas.\n"
@@ -534,7 +538,8 @@ class GeminiLLMFilter:
         prompt = (
             "Review the image and verify object detections used for cleanliness scoring.\n"
             "Keep detections only when the object visibly matches one of the allowed model labels.\n"
-            "If a detected object is actually furniture, background, wall, floor pattern, or scene structure, reject it.\n"
+            "Keep only visible trash-like cleanliness evidence: metal, paper, plastic, trash, marks, debris, or waste.\n"
+            "If a detected object is actually a toilet, sink, fixture, furniture, background, wall, floor pattern, or scene structure, reject it.\n"
             "You may add at most 2 advisory object boxes only when the image clearly shows a missed object belonging to the allowed labels.\n"
             "Return JSON only with this shape:\n"
             '{"verified_detection_indexes":[0,1],"advisory_object_boxes":[{"label":"trash","confidence":0.85,"bbox_norm":[0.1,0.2,0.3,0.4],"reason":"short"}],"reasons":["short"],"confidence_note":"short"}\n'

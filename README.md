@@ -2,6 +2,36 @@
 
 Hệ thống AI kép (Dual-Model) đánh giá chất lượng vệ sinh từ ảnh Before/After, sử dụng YOLOv8 và U-Net. Cấu hình được tối ưu chạy trên RTX 3050 (4GB/8GB VRAM).
 
+## Bao cao va Pilot Benchmark
+
+Neu can viet muc AI Scoring trong bao cao do an, repo da co san bo artifact de dung ngay:
+
+- `docs/AI_SCORING_REPORT_GUIDE.md`: huong dan viet bao cao theo huong software engineering + pilot benchmark
+- `docs/templates/ai_scoring_report_section_template.md`: doan bao cao co the copy vao luan van
+- `docs/templates/pilot_benchmark_dataset_template.csv`: template CSV cho tap benchmark nho
+- `docs/templates/pilot_benchmark_case_studies_template.csv`: template case study minh hoa
+- `docs/templates/ppe_pilot_benchmark_template.csv`: template CSV cho PPE benchmark
+- `scripts/summarize_pilot_benchmark.py`: script tong hop `verdict_accuracy`, `false_pass_rate`, `false_fail_rate`, `pending_review_rate`, `average_latency_ms`
+- `scripts/summarize_ppe_benchmark.py`: script tong hop `ppe_status_accuracy`, `missing_item_recall`, `false_missing_rate`, `average_latency_ms`
+
+Vi du tong hop ket qua pilot benchmark:
+
+```powershell
+python scripts/summarize_pilot_benchmark.py `
+  --input-csv docs/templates/pilot_benchmark_dataset_template.csv `
+  --output-json outputs/reports/pilot_benchmark_summary.json `
+  --output-md outputs/reports/pilot_benchmark_summary.md
+```
+
+Vi du tong hop ket qua PPE pilot benchmark:
+
+```powershell
+python scripts/summarize_ppe_benchmark.py `
+  --input-csv docs/templates/ppe_pilot_benchmark_template.csv `
+  --output-json outputs/reports/ppe_pilot_benchmark_summary.json `
+  --output-md outputs/reports/ppe_pilot_benchmark_summary.md
+```
+
 ## Danh sách Dataset sử dụng (6 Links từ Đồ án)
 
 Hệ thống được thiết kế để tiêu thụ chính xác 6 nguồn dữ liệu bạn đã cung cấp, chia làm 2 luồng:

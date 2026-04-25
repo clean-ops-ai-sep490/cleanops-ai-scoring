@@ -85,6 +85,15 @@ def _as_int_tuple(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(values) if values else default
 
 
+def _as_str_tuple(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    values = tuple(item.strip() for item in raw.split(",") if item.strip())
+    return values or default
+
+
 def _resolve_path(raw: Optional[str], fallback: Optional[Path] = None) -> Optional[Path]:
     if raw:
         p = Path(raw)
@@ -216,6 +225,8 @@ class Settings:
     yolo_conf: float
     max_batch_images: int
     pending_lower_bound: float
+    scoring_penalty_labels: tuple[str, ...]
+    scoring_object_penalty_per_detection: float
     visualize_jpeg_quality: int
     visualize_temp_url_ttl_sec: int
     visualize_temp_max_items: int
@@ -372,6 +383,29 @@ def _build_settings() -> Settings:
         yolo_conf=_as_float("YOLO_CONF", 0.25),
         max_batch_images=_as_int("MAX_BATCH_IMAGES", 5),
         pending_lower_bound=_as_float("PENDING_LOWER_BOUND", 50.0),
+        scoring_penalty_labels=_as_str_tuple(
+            "SCORING_PENALTY_LABELS",
+            (
+                "metal",
+                "paper",
+                "plastic",
+                "trash",
+                "marks",
+                "garbage",
+                "rubbish",
+                "litter",
+                "waste",
+                "debris",
+                "bottle",
+                "plastic_bottle",
+                "can",
+                "cup",
+                "cardboard",
+                "bag",
+                "trash_bag",
+            ),
+        ),
+        scoring_object_penalty_per_detection=_as_float("SCORING_OBJECT_PENALTY_PER_DETECTION", 10.0),
         visualize_jpeg_quality=_as_int("VISUALIZE_JPEG_QUALITY", 92),
         visualize_temp_url_ttl_sec=_as_int("VISUALIZE_TEMP_URL_TTL_SEC", 900),
         visualize_temp_max_items=_as_int("VISUALIZE_TEMP_MAX_ITEMS", 200),

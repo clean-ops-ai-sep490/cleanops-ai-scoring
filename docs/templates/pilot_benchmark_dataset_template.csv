@@ -1,0 +1,20 @@
+image_id,image_url,environment_key,expected_verdict,predicted_verdict,quality_score,pass_threshold,latency_ms,dirty_level,has_large_trash,visualization_url,notes
+scoring_01,https://smartcleanvn.com/wp-content/uploads/2022/09/ve-sinh-san-nha.jpg,LOBBY_CORRIDOR,PASS,,,90,,clean,no,,clean glossy indoor floor with no visible dirt or debris
+scoring_02,https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSUTXx-IBBldceZ1d2IeQzs9vKxx0VLk2TJrw&s,LOBBY_CORRIDOR,PASS,,,90,,clean,no,,clean wooden floor with reflective finish
+scoring_03,https://pramie.vn/wp-content/uploads/2024/08/ck3583089-meo-lau-nha-nhanh-sach-6.jpg,LOBBY_CORRIDOR,PASS,,,90,,clean,no,,living room floor appears clean and polished
+scoring_04,https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTL_VvZ5NZwKKr5EVa1LxQbDxrQfq89xy10Lg&s,LOBBY_CORRIDOR,PENDING,,,90,,slightly_dirty,no,,floor is still being mopped so the surface may remain wet
+scoring_05,https://smartcleanvn.com/wp-content/uploads/2022/09/ve-snh-san-nha-1.jpg,LOBBY_CORRIDOR,PASS,,,90,,clean,no,,large bright room with clean white floor
+scoring_06,https://cdn-img-v2.mybota.vn/media/10639/untitled%20folder/san-go-cong-nghiep-kronoswiss%20(10).jpg,LOBBY_CORRIDOR,PASS,,,90,,clean,no,,corridor floor looks clean and dry
+scoring_07,https://cafefcdn.com/203337114487263232/2026/3/16/base64-17732919761491998636958-1773621299023-17736212991591122509146-1773666372629-1773666372990798379669.jpeg,RESTROOM,PASS,,,85,,clean,no,,restroom tile floor appears clean with no visible debris
+scoring_08,https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSmoiZcI6w7lI1rE6D8gGXqmcY1BO-nPBFlUA&s,RESTROOM,FAIL,,,85,,obviously_dirty,no,,close-up shows dirty grout or residue on tile surface
+scoring_09,https://hafuco.com/wp-content/uploads/2020/11/nguyen-nhan-khien-san-nha-bi-ban.jpg,LOBBY_CORRIDOR,PENDING,,,90,,slightly_dirty,no,,floor contains visible crumbs or small scattered dirt
+scoring_10,https://baokhanhhoa.vn/file/e7837c02857c8ca30185a8c39b582c03/dataimages/201803/original/images5327410_2_nha_ve_sinh_bi_bo_hoang.jpg,RESTROOM,FAIL,,,85,,obviously_dirty,yes,,restroom floor contains heavy debris and visible waste
+scoring_11,https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQkOojCH1I6_ZPzQEHFAaxvG2resfApTmMOXQ&s,OUTDOOR_LANDSCAPE,PENDING,,,80,,slightly_dirty,no,,balcony or outdoor tile surface looks stained or dusty
+scoring_12,https://media-cdn-v2.laodong.vn/Storage/NewsPortal/2023/4/12/1178987/Z4258739626997_Be44a.jpg,OUTDOOR_LANDSCAPE,FAIL,,,80,,obviously_dirty,yes,,outdoor area is covered with many fallen leaves
+scoring_13,https://viglacerahanoi.vn/wp-content/uploads/2017/11/quy-trinh-lat-gach-nen-nha.jpg,LOBBY_CORRIDOR,FAIL,,,90,,obviously_dirty,yes,,indoor floor contains construction tools and debris
+scoring_14,https://viglaceraofficial.com/storage/gach-lat-nen-nha-cap-4-(8).jpg,LOBBY_CORRIDOR,PASS,,,90,,clean,no,,newly finished floor appears clean and reflective
+scoring_15,https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRmHqqJIEibFIMKO9Erg1j0oPVGU3Y7D6xMpQ&s,LOBBY_CORRIDOR,PENDING,,,90,,slightly_dirty,no,,low-angle view suggests a usable floor but not clearly polished
+scoring_16,https://vaidecor.vn/wp-content/uploads/2025/07/quy-trinh-giai-phap-nang-nen-nha-hieu-qua.jpg,LOBBY_CORRIDOR,PASS,,,90,,clean,no,,wooden floor appears clean and recently maintained
+scoring_17,https://tedco.com.vn/wp-content/uploads/2024/12/Mau-son-nen-nha-o-so-1.png,LOBBY_CORRIDOR,PASS,,,90,,clean,no,,wide empty room with clean epoxy-like floor
+scoring_18,https://vn.toto.com/wp-content/webp-express/webp-images/uploads/2024/10/cach-ve-sinh-san-nha-sau-xay-dung-5.jpg.webp,LOBBY_CORRIDOR,PENDING,,,90,,slightly_dirty,no,,floor is in active cleaning stage and may remain wet
+scoring_19,https://www.hoanmyclean.vn/wp-content/uploads/2024/07/cach-lau-san-nha-sach-bong-5.jpg,LOBBY_CORRIDOR,PASS,,,90,,clean,no,,wooden floor is glossy and appears fully cleaned

@@ -125,11 +125,18 @@ Cong thuc tong quat:
 He thong tinh diem tren tung anh theo cong thuc:
 
 1. base_clean_score = 100 - total_dirty_coverage_pct
-2. object_penalty = min(30, detections_count * 5)
-3. quality_score = clamp(base_clean_score - object_penalty, 0, 100)
+2. penalty_detections_count = so detection co label thuoc nhom rac/ve sinh
+3. object_penalty = min(40, penalty_detections_count * 10)
+4. quality_score = clamp(base_clean_score - object_penalty, 0, 100)
 
 Trong do:
-- detections_count lay tu YOLO.
+- detections_count la tong detection sau YOLO/LLM verification, dung cho debug/visualize.
+- penalty_detections_count chi dem cac label trong SCORING_PENALTY_LABELS.
+- penalty_detection_indexes va ignored_detection_indexes giup frontend/visualization biet box nao anh huong scoring.
+- Mac dinh SCORING_PENALTY_LABELS = metal,paper,plastic,trash,marks,garbage,rubbish,litter,waste,debris,bottle,plastic_bottle,can,cup,cardboard,bag,trash_bag.
+- SCORING_OBJECT_PENALTY_PER_DETECTION mac dinh = 10.
+- Object penalty cap hien tai = 40.
+- Neu LLM verification fail/tat/skip, he thong van dung label filter tren YOLO result hien co, khong phat toan bo detections_count.
 - clamp(x, 0, 100) dam bao diem nam trong [0, 100].
 
 ## 5.3 Rule PASS/PENDING/FAIL
@@ -151,15 +158,16 @@ Bang threshold theo env:
 Gia su:
 - total_dirty_coverage_pct = 12.5
 - detections_count = 2
+- penalty_detections_count = 2
 - env = LOBBY_CORRIDOR (threshold = 90)
 
 Tinh:
 - base_clean_score = 100 - 12.5 = 87.5
-- object_penalty = min(30, 2*5) = 10
-- quality_score = 87.5 - 10 = 77.5
+- object_penalty = min(40, 2*10) = 20
+- quality_score = 87.5 - 20 = 67.5
 
 Ket luan:
-- 77.5 < 90 va >= 50 => verdict = PENDING
+- 67.5 < 90 va >= 50 => verdict = PENDING
 
 ## 6) Luu y van hanh cho team
 - Neu test tren Swagger ma file upload bi loi UI, restart server va hard refresh trang docs.
@@ -238,7 +246,13 @@ Response mau (rut gon):
 	"image_base64": "...",
 	"scoring": {
 		"quality_score": 86.4,
-		"verdict": "PENDING"
+		"verdict": "PENDING",
+		"penalty_detections_count": 1,
+		"ignored_detections_count": 1,
+		"penalty_detection_labels": ["trash"],
+		"ignored_detection_labels": ["toilet"],
+		"penalty_detection_indexes": [0],
+		"ignored_detection_indexes": [1]
 	},
 	"yolo": {
 		"detections_count": 2,

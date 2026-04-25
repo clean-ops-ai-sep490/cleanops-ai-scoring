@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 import torch
 
-from src.api.scoring_utils import score_image
+from src.api.scoring_utils import score_image, summarize_penalty_detections
 from src.models.unet_segmenter import UNetSegmenter
 
 
@@ -119,6 +119,8 @@ def evaluate_image_with_artifacts(
     class_map: Dict[int, str],
     env_rules: Dict[str, Dict[str, object]],
     pending_lower_bound: float,
+    scoring_penalty_labels: tuple[str, ...],
+    scoring_object_penalty_per_detection: float,
 ):
     yolo_result = yolo_predict_from_pil(img, model=model, yolo_conf=yolo_conf)
     unet_result = unet_predict_from_pil(
@@ -129,12 +131,18 @@ def evaluate_image_with_artifacts(
         class_map=class_map,
     )
 
+    penalty_summary = summarize_penalty_detections(
+        yolo_result.get("results", []),
+        scoring_penalty_labels,
+    )
     score = score_image(
         total_dirty_coverage_pct=unet_result["summary"]["total_dirty_coverage_pct"],
         detections_count=yolo_result["detections_count"],
         env_key=env_key,
         env_rules=env_rules,
         pending_lower_bound=pending_lower_bound,
+        object_penalty_per_detection=scoring_object_penalty_per_detection,
+        **penalty_summary,
     )
     return yolo_result, unet_result, score
 
@@ -150,6 +158,8 @@ def evaluate_image(
     class_map: Dict[int, str],
     env_rules: Dict[str, Dict[str, object]],
     pending_lower_bound: float,
+    scoring_penalty_labels: tuple[str, ...],
+    scoring_object_penalty_per_detection: float,
 ) -> Dict[str, Any]:
     yolo_result, unet_result, score = evaluate_image_with_artifacts(
         img,
@@ -162,6 +172,8 @@ def evaluate_image(
         class_map=class_map,
         env_rules=env_rules,
         pending_lower_bound=pending_lower_bound,
+        scoring_penalty_labels=scoring_penalty_labels,
+        scoring_object_penalty_per_detection=scoring_object_penalty_per_detection,
     )
 
     return {

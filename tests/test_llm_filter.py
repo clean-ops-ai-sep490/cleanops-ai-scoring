@@ -194,8 +194,8 @@ class GeminiLLMFilterTests(unittest.TestCase):
         )
         raw_scoring = {
             "base_clean_score": 88.0,
-            "object_penalty": 5.0,
-            "quality_score": 83.0,
+            "object_penalty": 10.0,
+            "quality_score": 78.0,
             "pass_threshold": 90.0,
             "verdict": "PENDING",
             "reasons": ["objects remain"],
