@@ -162,31 +162,6 @@ Runtime image hien tai chi nham muc dich inference + retrain bridge:
 - khong bake model checkpoint vao image
 - healthcheck Docker bam vao `GET /health/ready`
 
-### Gemini LLM filter (demo reliability layer)
-
-Co the bat lop review bang Gemini de refine ket qua tra ve cua cac API inference ma khong doi request/response schema hien tai:
-
-- `LLM_FILTER_ENABLED=true`
-- `LLM_FILTER_MODEL=gemini-2.5-pro`
-- `LLM_FILTER_TIMEOUT_SEC=12`
-- `LLM_FILTER_BATCH_CONCURRENCY=2`
-- `LLM_FILTER_QUEUE_ENABLED=true`
-- `LLM_FILTER_QUEUE_MODE=global_fifo`
-- `LLM_FILTER_DEADLINE_SEC=60`
-- `LLM_FILTER_RETRY_INITIAL_DELAY_MS=1000`
-- `LLM_FILTER_RETRY_MAX_DELAY_MS=8000`
-- `LLM_FILTER_RETRYABLE_STATUS_CODES=429,500,502,503,504`
-- `GEMINI_API_KEY=<your_gemini_key>`
-- `GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta`
-
-Nguyen tac runtime:
-
-- Moi Gemini call duoc xep vao hang doi FIFO toan cuc, request sau se cho request truoc xu ly xong.
-- Neu Gemini goi thanh cong, service se refine verdict/scoring hoac loc bot detection khong tin cay tuy endpoint.
-- Neu Gemini bi timeout, 429 hoac loi retryable khac, worker se retry co backoff cho toi khi cham `LLM_FILTER_DEADLINE_SEC`, sau do moi fallback ve ket qua CV goc.
-- `LLM_FILTER_TIMEOUT_SEC` la timeout cho tung lan HTTP call; gia tri nay nen nho hon `LLM_FILTER_DEADLINE_SEC` de con slot retry.
-- Health payload (`/`, `/health/live`, `/health/ready`) co them metadata: `llm_filter_enabled`, `llm_filter_configured`, `llm_filter_model`, `llm_filter_last_error`, `llm_filter_last_result`, `llm_filter_queue_mode`, `llm_filter_deadline_sec`, `llm_filter_queue_depth`.
-
 ### Strict mode (blob-first, fail-fast)
 
 De bat stricter runtime policy cho API (require blob active model) voi 1 compose file duy nhat:

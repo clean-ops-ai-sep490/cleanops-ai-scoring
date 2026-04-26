@@ -130,13 +130,13 @@ He thong tinh diem tren tung anh theo cong thuc:
 4. quality_score = clamp(base_clean_score - object_penalty, 0, 100)
 
 Trong do:
-- detections_count la tong detection sau YOLO/LLM verification, dung cho debug/visualize.
+- detections_count la tong detection tu YOLO, dung cho debug/visualize.
 - penalty_detections_count chi dem cac label trong SCORING_PENALTY_LABELS.
 - penalty_detection_indexes va ignored_detection_indexes giup frontend/visualization biet box nao anh huong scoring.
 - Mac dinh SCORING_PENALTY_LABELS = metal,paper,plastic,trash,marks,garbage,rubbish,litter,waste,debris,bottle,plastic_bottle,can,cup,cardboard,bag,trash_bag.
 - SCORING_OBJECT_PENALTY_PER_DETECTION mac dinh = 10.
 - Object penalty cap hien tai = 40.
-- Neu LLM verification fail/tat/skip, he thong van dung label filter tren YOLO result hien co, khong phat toan bo detections_count.
+- He thong dung label filter tren YOLO result hien co, khong phat toan bo detections_count.
 - clamp(x, 0, 100) dam bao diem nam trong [0, 100].
 
 ## 5.3 Rule PASS/PENDING/FAIL

@@ -94,9 +94,7 @@ async def evaluate_ppe_payload(
     model: YOLO,
     timeout_sec: int,
     min_confidence: float,
-    llm_filter: Any | None = None,
     batch_concurrency: int = 2,
-    allowed_labels: list[str] | None = None,
 ) -> dict[str, Any]:
     aggregated_confidences: dict[str, float] = {}
     detected_items: list[dict[str, Any]] = []
@@ -120,24 +118,6 @@ async def evaluate_ppe_payload(
                     image_index,
                 )
                 _, per_image_items = summarize_detections(detections, image_index)
-                if llm_filter is not None:
-                    should_verify, skip_reason = llm_filter.should_verify_ppe(
-                        required_objects=normalized_required_objects,
-                        detected_items=per_image_items,
-                        min_confidence=min_confidence,
-                    )
-                    if should_verify:
-                        per_image_items = await asyncio.to_thread(
-                            llm_filter.refine_ppe_detected_items,
-                            image,
-                            required_objects=normalized_required_objects,
-                            detected_items=per_image_items,
-                            allowed_labels=allowed_labels or [],
-                            min_confidence=min_confidence,
-                            source=f"ppe[{image_index}]",
-                        )
-                    else:
-                        llm_filter.mark_skip("ppe_verification", f"ppe[{image_index}]", skip_reason or "cv_confident")
 
                 return {
                     "image_url": image_url,
@@ -190,38 +170,5 @@ async def evaluate_ppe_payload(
     }
     if failed_images:
         response["failed_images"] = failed_images
-    if llm_filter is not None:
-        metadata_template = llm_filter.response_metadata("ppe[0]", ["ppe_verification"]) if image_urls else {
-            "enabled": getattr(llm_filter, "enabled", False),
-            "configured": getattr(llm_filter, "configured", False),
-            "model": getattr(llm_filter, "model", None),
-            "queue_mode": "disabled",
-            "deadline_sec": 0,
-            "stages": {},
-        }
-        stage_items = []
-        for image_index, _ in enumerate(image_urls):
-            metadata = llm_filter.response_metadata(f"ppe[{image_index}]", ["ppe_verification"])
-            stage = metadata.get("stages", {}).get("ppe_verification")
-            if stage is None:
-                continue
-            stage_items.append(
-                {
-                    "image_index": image_index,
-                    **stage,
-                }
-            )
-        response["llm_filter"] = {
-            "enabled": metadata_template.get("enabled", getattr(llm_filter, "enabled", False)),
-            "configured": metadata_template.get("configured", getattr(llm_filter, "configured", False)),
-            "mode": metadata_template.get("mode"),
-            "model": metadata_template.get("model", getattr(llm_filter, "model", None)),
-            "queue_mode": metadata_template.get("queue_mode", "disabled"),
-            "deadline_sec": metadata_template.get("deadline_sec", 0),
-            "cooldown_active": metadata_template.get("cooldown_active", False),
-            "stages": {
-                "ppe_verification": stage_items,
-            },
-        }
 
     return response

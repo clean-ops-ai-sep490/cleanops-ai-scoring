@@ -43,7 +43,5 @@ async def evaluate_ppe(request: PpeEvaluateRequest):
         model=app_state.PPE_MODEL,
         timeout_sec=app_state.REQUEST_TIMEOUT_SEC,
         min_confidence=request.min_confidence,
-        llm_filter=app_state.LLM_FILTER,
-        batch_concurrency=app_state.settings.llm_filter_batch_concurrency,
-        allowed_labels=app_state.PPE_CLASS_LABELS,
+        batch_concurrency=2,
     )

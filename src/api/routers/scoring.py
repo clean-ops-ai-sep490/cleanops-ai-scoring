@@ -106,7 +106,6 @@ async def predict_unet_url_visualize(payload: ImageURL):
         img = _load_image_from_url(payload.url)
         result = app_state.unet_predict_from_pil(
             img,
-            apply_llm_filter=False,
             source=f"/predict-unet-url-visualize:{payload.url}",
         )
         rendered = app_state.render_unet_overlay(result["rgb"], result["mask_original_size"])
@@ -174,7 +173,7 @@ async def evaluate_batch(
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
 
-    semaphore = asyncio.Semaphore(max(1, app_state.settings.llm_filter_batch_concurrency))
+    semaphore = asyncio.Semaphore(max(1, min(app_state.MAX_BATCH_IMAGES, total_images)))
 
     async def process_upload(seq: int, upload: UploadFile):
         try:
@@ -334,7 +333,7 @@ async def evaluate_visualize(
             return JSONResponse(status_code=400, content={"error": "File ảnh rỗng."})
 
         img = _load_image_from_bytes(content)
-        yolo_result, unet_result, scoring, dirty_region_candidates, visual_review = app_state.evaluate_image_with_visual_review(
+        yolo_result, unet_result, scoring, dirty_region_candidates = app_state.evaluate_image_for_visualization(
             img,
             env_key,
             source=f"/evaluate-visualize:{file.filename or 'upload'}",
@@ -345,7 +344,6 @@ async def evaluate_visualize(
             yolo_result=yolo_result,
             scoring=scoring,
             env_key=env_key,
-            visual_review=visual_review,
             dirty_region_candidates=dirty_region_candidates,
         )
         return Response(content=rendered, media_type="image/jpeg")
@@ -367,7 +365,7 @@ async def evaluate_url_visualize(payload: EvaluateVisualizeRequest):
 
     try:
         img = _load_image_from_url(payload.url)
-        yolo_result, unet_result, scoring, dirty_region_candidates, visual_review = app_state.evaluate_image_with_visual_review(
+        yolo_result, unet_result, scoring, dirty_region_candidates = app_state.evaluate_image_for_visualization(
             img,
             env_key,
             source=f"/evaluate-url-visualize:{payload.url}",
@@ -378,7 +376,6 @@ async def evaluate_url_visualize(payload: EvaluateVisualizeRequest):
             yolo_result=yolo_result,
             scoring=scoring,
             env_key=env_key,
-            visual_review=visual_review,
             dirty_region_candidates=dirty_region_candidates,
         )
         return Response(content=rendered, media_type="image/jpeg")
@@ -409,7 +406,7 @@ async def evaluate_visualize_json(
             return JSONResponse(status_code=400, content={"error": "File ảnh rỗng."})
 
         img = _load_image_from_bytes(content)
-        yolo_result, unet_result, scoring, dirty_region_candidates, visual_review = app_state.evaluate_image_with_visual_review(
+        yolo_result, unet_result, scoring, dirty_region_candidates = app_state.evaluate_image_for_visualization(
             img,
             env_key,
             source=f"/evaluate-visualize-json:{file.filename or 'upload'}",
@@ -420,7 +417,6 @@ async def evaluate_visualize_json(
             yolo_result=yolo_result,
             scoring=scoring,
             env_key=env_key,
-            visual_review=visual_review,
             dirty_region_candidates=dirty_region_candidates,
         )
 
@@ -432,11 +428,6 @@ async def evaluate_visualize_json(
             unet_result=unet_result,
             scoring=scoring,
             rendered=rendered,
-            llm_filter=app_state.build_llm_filter_payload(
-                f"/evaluate-visualize-json:{file.filename or 'upload'}",
-                kinds=["scoring_verification"],
-                route_mode="visualize_enhanced",
-            ),
         )
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(status_code=400, content={"error": str(exc)})
@@ -456,7 +447,7 @@ async def evaluate_url_visualize_json(payload: EvaluateVisualizeRequest):
 
     try:
         img = _load_image_from_url(payload.url)
-        yolo_result, unet_result, scoring, dirty_region_candidates, visual_review = app_state.evaluate_image_with_visual_review(
+        yolo_result, unet_result, scoring, dirty_region_candidates = app_state.evaluate_image_for_visualization(
             img,
             env_key,
             source=f"/evaluate-url-visualize-json:{payload.url}",
@@ -467,7 +458,6 @@ async def evaluate_url_visualize_json(payload: EvaluateVisualizeRequest):
             yolo_result=yolo_result,
             scoring=scoring,
             env_key=env_key,
-            visual_review=visual_review,
             dirty_region_candidates=dirty_region_candidates,
         )
 
@@ -479,11 +469,6 @@ async def evaluate_url_visualize_json(payload: EvaluateVisualizeRequest):
             unet_result=unet_result,
             scoring=scoring,
             rendered=rendered,
-            llm_filter=app_state.build_llm_filter_payload(
-                f"/evaluate-url-visualize-json:{payload.url}",
-                kinds=["scoring_verification"],
-                route_mode="visualize_enhanced",
-            ),
         )
     except requests.exceptions.RequestException as exc:
         return JSONResponse(status_code=400, content={"error": f"Không thể tải ảnh từ URL: {str(exc)}"})
@@ -512,7 +497,7 @@ async def evaluate_visualize_link(
             return JSONResponse(status_code=400, content={"error": "File ảnh rỗng."})
 
         img = _load_image_from_bytes(content)
-        yolo_result, unet_result, scoring, dirty_region_candidates, visual_review = app_state.evaluate_image_with_visual_review(
+        yolo_result, unet_result, scoring, dirty_region_candidates = app_state.evaluate_image_for_visualization(
             img,
             env_key,
             source=f"/evaluate-visualize-link:{file.filename or 'upload'}",
@@ -523,7 +508,6 @@ async def evaluate_visualize_link(
             yolo_result=yolo_result,
             scoring=scoring,
             env_key=env_key,
-            visual_review=visual_review,
             dirty_region_candidates=dirty_region_candidates,
         )
 
@@ -535,11 +519,6 @@ async def evaluate_visualize_link(
             unet_result=unet_result,
             scoring=scoring,
             rendered=rendered,
-            llm_filter=app_state.build_llm_filter_payload(
-                f"/evaluate-visualize-link:{file.filename or 'upload'}",
-                kinds=["scoring_verification"],
-                route_mode="visualize_enhanced",
-            ),
         )
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(status_code=400, content={"error": str(exc)})
@@ -559,7 +538,7 @@ async def evaluate_url_visualize_link(payload: EvaluateVisualizeRequest):
 
     try:
         img = _load_image_from_url(payload.url)
-        yolo_result, unet_result, scoring, dirty_region_candidates, visual_review = app_state.evaluate_image_with_visual_review(
+        yolo_result, unet_result, scoring, dirty_region_candidates = app_state.evaluate_image_for_visualization(
             img,
             env_key,
             source=f"/evaluate-url-visualize-link:{payload.url}",
@@ -570,7 +549,6 @@ async def evaluate_url_visualize_link(payload: EvaluateVisualizeRequest):
             yolo_result=yolo_result,
             scoring=scoring,
             env_key=env_key,
-            visual_review=visual_review,
             dirty_region_candidates=dirty_region_candidates,
         )
 
@@ -582,11 +560,6 @@ async def evaluate_url_visualize_link(payload: EvaluateVisualizeRequest):
             unet_result=unet_result,
             scoring=scoring,
             rendered=rendered,
-            llm_filter=app_state.build_llm_filter_payload(
-                f"/evaluate-url-visualize-link:{payload.url}",
-                kinds=["scoring_verification"],
-                route_mode="visualize_enhanced",
-            ),
         )
     except requests.exceptions.RequestException as exc:
         return JSONResponse(status_code=400, content={"error": f"Không thể tải ảnh từ URL: {str(exc)}"})

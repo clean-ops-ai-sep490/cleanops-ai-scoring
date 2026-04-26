@@ -38,7 +38,6 @@ class VisualizationUtilsTests(unittest.TestCase):
                     scoring=scoring,
                     env_key="LOBBY_CORRIDOR",
                     visualize_jpeg_quality=92,
-                    visual_review={"keep_detection_indexes": [0, 1]},
                     dirty_region_candidates=[],
                 )
 
