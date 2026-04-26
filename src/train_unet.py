@@ -132,6 +132,8 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--encoder", default="resnet50")
+    parser.add_argument("--encoder-weights", default="imagenet")
+    parser.add_argument("--init-checkpoint", default="")
     parser.add_argument("--save-path", default=settings.unet_model_path)
     args = parser.parse_args()
 
@@ -156,6 +158,8 @@ def main():
     print("=" * 72)
     print(f"device   : {device}")
     print(f"encoder  : {args.encoder}")
+    print(f"weights  : {args.encoder_weights}")
+    print(f"init_ckpt: {args.init_checkpoint or '(none)'}")
     print(f"img_size : {args.img_size}")
     print(f"epochs   : {args.epochs}")
     print(f"batch    : {args.batch}")
@@ -170,7 +174,18 @@ def main():
     print(f"train samples: {len(train_loader.dataset)}")
     print(f"valid samples: {len(valid_loader.dataset)}")
 
-    model = UNetSegmenter(encoder_name=args.encoder, classes=3).to(device)
+    encoder_weights = None if str(args.encoder_weights).strip().lower() in {"", "none", "null"} else args.encoder_weights
+    model = UNetSegmenter(encoder_name=args.encoder, encoder_weights=encoder_weights, classes=3).to(device)
+    if args.init_checkpoint:
+        init_path = Path(args.init_checkpoint)
+        if not init_path.exists():
+            raise FileNotFoundError(f"U-Net init checkpoint not found: {init_path}")
+
+        ckpt = torch.load(init_path, map_location=device)
+        state = ckpt.get("model_state") if isinstance(ckpt, dict) and "model_state" in ckpt else ckpt
+        model.load_state_dict(state)
+        print(f"Loaded U-Net init checkpoint: {init_path}")
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     scaler = GradScaler(enabled=use_amp)
 

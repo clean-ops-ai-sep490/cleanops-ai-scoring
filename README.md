@@ -293,7 +293,7 @@ Luu y:
 
 - Mac dinh compose da bat RETRAIN_USE_REMOTE_TRAINER=true, nhung `RETRAIN_TRAINER_BASE_URL` can duoc set ro rang theo moi truong.
 - Voi flow host trainer local + `ngrok`, scoring API trong Docker se goi trainer qua URL `https://<your-ngrok-domain>`.
-- Service trainer chay command train qua bien TRAINER_COMMAND (mac dinh: `python src/train_yolo.py`).
+- Service trainer chay command train qua bien TRAINER_COMMAND. Flow production dung `python scripts/run_retrain_pipeline.py` de build dataset tu approved annotations, train YOLO/U-Net, va publish candidate artifacts.
 - Neu tat RETRAIN_USE_REMOTE_TRAINER va RETRAIN_COMMAND de trong, API se fallback candidate da co san tren Blob (neu RETRAIN_ALLOW_EXISTING_BLOB_CANDIDATE=true).
 - De backend promote duoc, can dam bao candidate artifacts ton tai tai prefix `scoring/external/latest` (hoac prefix ban da set).
 

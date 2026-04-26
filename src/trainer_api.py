@@ -117,12 +117,22 @@ def run_trainer_job(
         )
 
     logger.info("Trainer job started. job_id=%s batch_id=%s", payload.jobId, payload.batchId)
+    command_env = os.environ.copy()
+    command_env.update(
+        {
+            "TRAINER_JOB_ID": payload.jobId,
+            "TRAINER_BATCH_ID": payload.batchId,
+            "TRAINER_SOURCE_WINDOW_FROM_UTC": payload.sourceWindowFromUtc or "",
+            "TRAINER_REVIEWED_SAMPLE_COUNT": str(payload.reviewedSampleCount),
+        }
+    )
 
     try:
         proc = subprocess.run(
             TRAINER_COMMAND,
             shell=True,
             cwd=str(workdir_path),
+            env=command_env,
             capture_output=True,
             text=True,
             timeout=TRAINER_TIMEOUT_SEC,
