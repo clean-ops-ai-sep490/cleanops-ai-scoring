@@ -368,6 +368,7 @@ class GeminiLLMFilterTests(unittest.TestCase):
 
         self.assertEqual(len(refined), 1)
         self.assertEqual(refined[0]["name"], "helmet")
+        self.assertEqual(refined[0]["source"], "detector")
 
     def test_refine_ppe_detected_items_can_add_required_visible_item(self):
         self.filter._invoke_json = Mock(  # type: ignore[method-assign]  # noqa: SLF001
@@ -392,7 +393,34 @@ class GeminiLLMFilterTests(unittest.TestCase):
         self.assertEqual(len(refined), 2)
         self.assertEqual(refined[0]["name"], "helmet")
         self.assertEqual(refined[1]["name"], "gloves")
+        self.assertEqual(refined[0]["source"], "detector")
+        self.assertEqual(refined[1]["source"], "filter")
         self.assertGreaterEqual(refined[1]["confidence"], 85.0)
+
+    def test_refine_ppe_detected_items_can_add_present_required_item(self):
+        self.filter._invoke_json = Mock(  # type: ignore[method-assign]  # noqa: SLF001
+            return_value={
+                "present_objects": ["gloves"],
+                "visible_missed_objects": ["helmet", "face_shield"],
+            }
+        )
+        raw_items = [
+            {"name": "helmet", "confidence": 85.0, "image_index": 0},
+        ]
+
+        refined = self.filter.refine_ppe_detected_items(
+            self.image,
+            required_objects=["helmet", "gloves"],
+            detected_items=raw_items,
+            allowed_labels=["helmet", "gloves", "face_shield"],
+            min_confidence=25.0,
+            source="unit",
+        )
+
+        self.assertEqual(refined[0]["name"], "helmet")
+        self.assertEqual(refined[0]["source"], "detector")
+        self.assertEqual(refined[1]["name"], "gloves")
+        self.assertEqual(refined[1]["source"], "filter")
 
     def test_refine_ppe_detected_items_does_not_add_legacy_visible_missing_field(self):
         self.filter._invoke_json = Mock(  # type: ignore[method-assign]  # noqa: SLF001

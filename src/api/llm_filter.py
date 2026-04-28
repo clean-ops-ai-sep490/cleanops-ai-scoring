@@ -1092,28 +1092,33 @@ class GeminiLLMFilter:
             self._log_parse_error("ppe_verification", source, "present_objects missing or invalid")
             return detected_items
 
-        present_objects = {str(item).strip().lower() for item in present_objects_raw if str(item).strip()}
-        refined = [
-            item
-            for item in detected_items
-            if str(item.get("name", "")).strip().lower() in present_objects
-        ]
         visible_missed_raw = parsed.get("visible_missed_objects")
         visible_missed = [
             str(item).strip().lower()
             for item in (visible_missed_raw if isinstance(visible_missed_raw, list) else [])
             if str(item).strip()
         ]
+        present_objects = {str(item).strip().lower() for item in present_objects_raw if str(item).strip()}
+        visible_candidates = present_objects | set(visible_missed)
+        refined: list[dict[str, Any]] = []
+        for item in detected_items:
+            label = str(item.get("name", "")).strip().lower()
+            if label not in visible_candidates:
+                continue
+            refined_item = dict(item)
+            refined_item["source"] = str(refined_item.get("source") or "detector")
+            refined.append(refined_item)
+
         existing_names = {str(item.get("name", "")).strip().lower() for item in refined}
-        normalized_required = {str(item).strip().lower() for item in required_objects if str(item).strip()}
+        normalized_required = [str(item).strip().lower() for item in required_objects if str(item).strip()]
         confidence_floor = _safe_float(min_confidence)
         confidence_floor = confidence_floor * 100.0 if confidence_floor <= 1 else confidence_floor
         synthetic_confidence = round(min(99.0, max(85.0, confidence_floor)), 1)
         image_index = _safe_int(refined[0].get("image_index")) if refined else _safe_int(detected_items[0].get("image_index")) if detected_items else 0
-        for label in visible_missed:
-            if label in existing_names:
+        for label in normalized_required:
+            if label not in visible_candidates:
                 continue
-            if label not in normalized_required:
+            if label in existing_names:
                 continue
             if allowed_label_set and label not in allowed_label_set:
                 continue
@@ -1122,8 +1127,10 @@ class GeminiLLMFilter:
                     "name": label,
                     "confidence": synthetic_confidence,
                     "image_index": image_index,
+                    "source": "filter",
                 }
             )
+            existing_names.add(label)
         self._logger.info(
             "llm_filter=applied kind=ppe_verification source=%s raw_count=%s refined_count=%s model=%s",
             source,

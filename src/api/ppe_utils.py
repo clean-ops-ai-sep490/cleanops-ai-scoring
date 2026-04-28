@@ -78,6 +78,7 @@ def summarize_detections(
                 "name": class_name,
                 "confidence": round(confidence, 1),
                 "image_index": image_index,
+                "source": "detector",
             }
 
     detected_dict = {
@@ -177,7 +178,7 @@ async def evaluate_ppe_payload(
     ]
     status = "PASS" if not missing_items else "FAIL"
     message = (
-        "Meets requirements."
+        "All required PPE items detected"
         if status == "PASS"
         else f"Missing items: {', '.join(missing_items)}"
     )
@@ -190,38 +191,5 @@ async def evaluate_ppe_payload(
     }
     if failed_images:
         response["failed_images"] = failed_images
-    if llm_filter is not None:
-        metadata_template = llm_filter.response_metadata("ppe[0]", ["ppe_verification"]) if image_urls else {
-            "enabled": getattr(llm_filter, "enabled", False),
-            "configured": getattr(llm_filter, "configured", False),
-            "model": getattr(llm_filter, "model", None),
-            "queue_mode": "disabled",
-            "deadline_sec": 0,
-            "stages": {},
-        }
-        stage_items = []
-        for image_index, _ in enumerate(image_urls):
-            metadata = llm_filter.response_metadata(f"ppe[{image_index}]", ["ppe_verification"])
-            stage = metadata.get("stages", {}).get("ppe_verification")
-            if stage is None:
-                continue
-            stage_items.append(
-                {
-                    "image_index": image_index,
-                    **stage,
-                }
-            )
-        response["llm_filter"] = {
-            "enabled": metadata_template.get("enabled", getattr(llm_filter, "enabled", False)),
-            "configured": metadata_template.get("configured", getattr(llm_filter, "configured", False)),
-            "mode": metadata_template.get("mode"),
-            "model": metadata_template.get("model", getattr(llm_filter, "model", None)),
-            "queue_mode": metadata_template.get("queue_mode", "disabled"),
-            "deadline_sec": metadata_template.get("deadline_sec", 0),
-            "cooldown_active": metadata_template.get("cooldown_active", False),
-            "stages": {
-                "ppe_verification": stage_items,
-            },
-        }
 
     return response
