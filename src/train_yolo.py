@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -27,13 +28,16 @@ def main():
         return
 
     print(f"[*] Bắt đầu huấn luyện với dataset: {data_yaml}")
+    workers = int(os.getenv("YOLO_WORKERS", "0"))
+
     print(
         "    Cau hinh: "
         f"epochs={settings.yolo_train_epochs}, "
         f"batch={settings.yolo_train_batch}, "
         f"imgsz={settings.yolo_train_imgsz}, "
         f"device={settings.yolo_device}, "
-        f"half={settings.yolo_use_half}"
+        f"half={settings.yolo_use_half}, "
+        f"workers={workers}"
     )
     
     # Bắt đầu train
@@ -46,6 +50,7 @@ def main():
         run_name=settings.yolo_run_name,
         device=settings.yolo_device,
         half=settings.yolo_use_half,
+        workers=workers,
     )
 
     print("\n[DONE] Đã hoàn tất huấn luyện luồng YOLO (Bounding Box).")

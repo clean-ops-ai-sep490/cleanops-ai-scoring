@@ -462,6 +462,7 @@ def main() -> None:
             "YOLO_RUN_NAME": yolo_run_name,
             "YOLO_DEVICE": yolo_device,
             "YOLO_USE_HALF": str(yolo_half).lower(),
+            "YOLO_WORKERS": str(env_int("RETRAIN_YOLO_WORKERS", 0)),
         }
     )
     run_command([sys.executable, "src/train_yolo.py"], env=yolo_env)

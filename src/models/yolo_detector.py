@@ -26,6 +26,7 @@ class YoloDetector:
         run_name="trash_detection",
         device="0",
         half=True,
+        workers=0,
     ):
         """
         Huấn luyện YOLOv8 trên tập dữ liệu Trash/Objects.
@@ -40,4 +41,5 @@ class YoloDetector:
             name=run_name,
             device=device,
             half=half,
+            workers=workers,
         )
