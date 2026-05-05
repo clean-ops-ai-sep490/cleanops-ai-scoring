@@ -1,0 +1,51 @@
+name: CI/CD Build and Deploy
+
+on:
+  push:
+    branches: [ "master" ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'docs/**'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-scoring:
+    runs-on: ubuntu-latest
+    environment: Azure
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Login to ACR
+        uses: azure/docker-login@v2
+        with:
+          login-server: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and Push Scoring Image
+        run: |
+          docker build --platform linux/amd64 --provenance=false --sbom=false \
+            -t ${{ secrets.ACR_LOGIN_SERVER }}/scoring:${{ github.sha }} .
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}/scoring:${{ github.sha }}
+
+  deploy-scoring:
+    runs-on: ubuntu-latest
+    environment: Azure
+    needs: build-scoring
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Scoring to ACA
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          acrName: ${{ secrets.ACR_NAME }}
+          containerAppName: ${{ secrets.CONTAINER_APP_NAME_SCORING }}
+          resourceGroup: ${{ secrets.RESOURCE_GROUP }}
+          imageToDeploy: ${{ secrets.ACR_LOGIN_SERVER }}/scoring:${{ github.sha }}
