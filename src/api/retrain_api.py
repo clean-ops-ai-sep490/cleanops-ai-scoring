@@ -196,6 +196,9 @@ class RetrainJobCreateRequest(BaseModel):
     batchId: str = Field(..., min_length=1)
     sourceWindowFromUtc: Optional[str] = None
     reviewedSampleCount: int = 0
+    approvedAnnotationCount: int = 0
+    minApprovedAnnotations: int = 100
+    maxSamplesPerBatch: int = 500
     samples: List[RetrainSample] = Field(default_factory=list)
 
 
@@ -250,6 +253,9 @@ def _invoke_remote_trainer(job_id: str, payload: RetrainJobCreateRequest) -> Non
         "batchId": payload.batchId,
         "sourceWindowFromUtc": payload.sourceWindowFromUtc,
         "reviewedSampleCount": payload.reviewedSampleCount,
+        "approvedAnnotationCount": payload.approvedAnnotationCount,
+        "minApprovedAnnotations": payload.minApprovedAnnotations,
+        "maxSamplesPerBatch": payload.maxSamplesPerBatch,
         "samples": [_as_model_dict(item) for item in payload.samples],
     }
     submit_url = _build_remote_url(RETRAIN_TRAINER_BASE_URL, RETRAIN_TRAINER_SUBMIT_PATH)
@@ -293,10 +299,23 @@ def _run_retrain_job(job_id: str, payload: RetrainJobCreateRequest) -> None:
             _invoke_remote_trainer(job_id, payload)
         elif RETRAIN_COMMAND:
             logger.info("Running retrain command for job %s: %s", job_id, RETRAIN_COMMAND)
+            command_env = os.environ.copy()
+            command_env.update(
+                {
+                    "TRAINER_JOB_ID": job_id,
+                    "TRAINER_BATCH_ID": payload.batchId,
+                    "TRAINER_SOURCE_WINDOW_FROM_UTC": payload.sourceWindowFromUtc or "",
+                    "TRAINER_REVIEWED_SAMPLE_COUNT": str(payload.reviewedSampleCount),
+                    "TRAINER_APPROVED_ANNOTATION_COUNT": str(payload.approvedAnnotationCount),
+                    "TRAINER_MIN_APPROVED_ANNOTATIONS": str(payload.minApprovedAnnotations),
+                    "TRAINER_MAX_SAMPLES_PER_BATCH": str(payload.maxSamplesPerBatch),
+                }
+            )
             proc = subprocess.run(
                 RETRAIN_COMMAND,
                 shell=True,
                 cwd=str(RETRAIN_WORKDIR),
+                env=command_env,
                 capture_output=True,
                 text=True,
                 timeout=RETRAIN_COMMAND_TIMEOUT_SEC,

@@ -151,6 +151,13 @@ def ensure_train_valid_splits(dataset_root: Path) -> None:
             raise RuntimeError("At least two exported samples are required to create train and valid splits.")
 
 
+def split_image_counts(dataset_root: Path) -> dict[str, int]:
+    return {
+        split: len(list_images(dataset_root / "yolo" / "images" / split))
+        for split in ("train", "valid", "test")
+    }
+
+
 def write_yolo_data_yaml(dataset_root: Path) -> Path:
     yolo_root = dataset_root / "yolo"
     data_yaml = yolo_root / "data.yaml"
@@ -401,10 +408,40 @@ def main() -> None:
     candidate_unet_path = resolve_path(env_str("RETRAIN_CANDIDATE_UNET_FILE", "outputs/retrain/candidate/unet_best.pth"))
     candidate_metrics_path = resolve_path(env_str("RETRAIN_CANDIDATE_METRICS_FILE", "outputs/retrain/candidate_metrics.json"))
 
-    min_approved = env_int("RETRAIN_MIN_APPROVED_ANNOTATIONS", 5)
-    dataset_limit = env_int("RETRAIN_DATASET_LIMIT", 5)
+    min_approved = env_int("TRAINER_MIN_APPROVED_ANNOTATIONS", env_int("RETRAIN_MIN_APPROVED_ANNOTATIONS", 100))
+    dataset_limit = env_int("TRAINER_MAX_SAMPLES_PER_BATCH", env_int("RETRAIN_DATASET_LIMIT", 500))
     if dataset_limit > 0 and dataset_limit < min_approved:
         raise RuntimeError("RETRAIN_DATASET_LIMIT must be >= RETRAIN_MIN_APPROVED_ANNOTATIONS for production retrain.")
+
+    yolo_config = {
+        "model": str(active_yolo_path),
+        "epochs": env_int("RETRAIN_YOLO_EPOCHS", 30),
+        "batch": env_int("RETRAIN_YOLO_BATCH", 4),
+        "imgsz": env_int("RETRAIN_YOLO_IMGSZ", 512),
+        "workers": env_int("RETRAIN_YOLO_WORKERS", 0),
+        "device": env_str("RETRAIN_YOLO_DEVICE", "auto"),
+        "half": env_bool("RETRAIN_YOLO_HALF", True),
+    }
+    unet_config = {
+        "init_checkpoint": str(active_unet_path),
+        "epochs": env_int("RETRAIN_UNET_EPOCHS", 40),
+        "batch": env_int("RETRAIN_UNET_BATCH", 2),
+        "imgsz": int(active_base_metadata.get("active_unet_metadata", {}).get("img_size") or env_int("RETRAIN_UNET_IMGSZ", 256)),
+        "workers": env_int("RETRAIN_UNET_WORKERS", 0),
+        "encoder": str(active_base_metadata.get("active_unet_metadata", {}).get("encoder") or env_str("RETRAIN_UNET_ENCODER", "resnet18")),
+        "encoder_weights": env_str("RETRAIN_UNET_ENCODER_WEIGHTS", "none"),
+        "lr": env_str("RETRAIN_UNET_LR", "1e-4"),
+    }
+    print("[CONFIG] CleanOps production retrain pipeline", flush=True)
+    print(f"[CONFIG] trainer_job_id={os.getenv('TRAINER_JOB_ID') or ''}", flush=True)
+    print(f"[CONFIG] trainer_batch_id={os.getenv('TRAINER_BATCH_ID') or ''}", flush=True)
+    print(f"[CONFIG] source_window_from_utc={env_str('TRAINER_SOURCE_WINDOW_FROM_UTC', '')}", flush=True)
+    print(f"[CONFIG] min_approved_annotations={min_approved}", flush=True)
+    print(f"[CONFIG] dataset_limit={dataset_limit}", flush=True)
+    print(f"[CONFIG] dataset_root={dataset_root}", flush=True)
+    print(f"[CONFIG] active_baseline={json.dumps(active_base_metadata, ensure_ascii=True)}", flush=True)
+    print(f"[CONFIG] yolo={json.dumps(yolo_config, ensure_ascii=True)}", flush=True)
+    print(f"[CONFIG] unet={json.dumps(unet_config, ensure_ascii=True)}", flush=True)
 
     recreate_dir(dataset_root)
     recreate_dir(yolo_project_dir / yolo_run_name)
@@ -430,8 +467,11 @@ def main() -> None:
         "--limit",
         str(dataset_limit),
     ]
+    source_window_from_utc = env_str("TRAINER_SOURCE_WINDOW_FROM_UTC", env_str("RETRAIN_ONLY_AFTER_UTC", ""))
     only_after_date = env_str("RETRAIN_ONLY_AFTER_DATE", "")
-    if only_after_date:
+    if source_window_from_utc:
+        build_args.extend(["--only-after-utc", source_window_from_utc])
+    elif only_after_date:
         build_args.extend(["--only-after-date", only_after_date])
 
     run_command(build_args)
@@ -445,24 +485,30 @@ def main() -> None:
         )
 
     ensure_train_valid_splits(dataset_root)
+    splits = split_image_counts(dataset_root)
+    print(
+        "[DATASET] split_counts "
+        f"train={splits['train']} valid={splits['valid']} test={splits['test']}",
+        flush=True,
+    )
     yolo_data_yaml = write_yolo_data_yaml(dataset_root)
 
-    yolo_device = resolve_device(env_str("RETRAIN_YOLO_DEVICE", "auto"))
-    yolo_half = env_bool("RETRAIN_YOLO_HALF", True) and yolo_device != "cpu"
+    yolo_device = resolve_device(str(yolo_config["device"]))
+    yolo_half = bool(yolo_config["half"]) and yolo_device != "cpu"
 
     yolo_env = os.environ.copy()
     yolo_env.update(
         {
             "YOLO_DATA_YAML": str(yolo_data_yaml),
             "YOLO_WEIGHTS_PATH": str(active_yolo_path),
-            "YOLO_TRAIN_EPOCHS": str(env_int("RETRAIN_YOLO_EPOCHS", 1)),
-            "YOLO_TRAIN_BATCH": str(env_int("RETRAIN_YOLO_BATCH", 1)),
-            "YOLO_TRAIN_IMGSZ": str(env_int("RETRAIN_YOLO_IMGSZ", 320)),
+            "YOLO_TRAIN_EPOCHS": str(yolo_config["epochs"]),
+            "YOLO_TRAIN_BATCH": str(yolo_config["batch"]),
+            "YOLO_TRAIN_IMGSZ": str(yolo_config["imgsz"]),
             "YOLO_PROJECT_DIR": str(yolo_project_dir),
             "YOLO_RUN_NAME": yolo_run_name,
             "YOLO_DEVICE": yolo_device,
             "YOLO_USE_HALF": str(yolo_half).lower(),
-            "YOLO_WORKERS": str(env_int("RETRAIN_YOLO_WORKERS", 0)),
+            "YOLO_WORKERS": str(yolo_config["workers"]),
         }
     )
     run_command([sys.executable, "src/train_yolo.py"], env=yolo_env)
@@ -478,17 +524,19 @@ def main() -> None:
             "--data-root",
             str(dataset_root / "unet"),
             "--epochs",
-            str(env_int("RETRAIN_UNET_EPOCHS", 1)),
+            str(unet_config["epochs"]),
             "--batch",
-            str(env_int("RETRAIN_UNET_BATCH", 1)),
+            str(unet_config["batch"]),
             "--img-size",
-            str(int(active_base_metadata.get("active_unet_metadata", {}).get("img_size") or env_int("RETRAIN_UNET_IMGSZ", 256))),
+            str(unet_config["imgsz"]),
+            "--lr",
+            str(unet_config["lr"]),
             "--workers",
-            str(env_int("RETRAIN_UNET_WORKERS", 0)),
+            str(unet_config["workers"]),
             "--encoder",
-            str(active_base_metadata.get("active_unet_metadata", {}).get("encoder") or env_str("RETRAIN_UNET_ENCODER", "resnet18")),
+            str(unet_config["encoder"]),
             "--encoder-weights",
-            env_str("RETRAIN_UNET_ENCODER_WEIGHTS", "none"),
+            str(unet_config["encoder_weights"]),
             "--init-checkpoint",
             str(active_unet_path),
             "--save-path",
@@ -512,10 +560,17 @@ def main() -> None:
             "batch_id": os.getenv("TRAINER_BATCH_ID"),
             "sample_count": exported,
             "dataset_root": str(dataset_root),
+            "dataset_splits": splits,
             "yolo_best_source": str(yolo_best),
             "unet_checkpoint": str(candidate_unet_path),
         },
         "activeBase": active_base_metadata,
+        "trainingConfig": {
+            "min_approved_annotations": min_approved,
+            "dataset_limit": dataset_limit,
+            "yolo": {**yolo_config, "device": yolo_device, "half": yolo_half},
+            "unet": unet_config,
+        },
         "dataset": summary,
         "yolo": {
             "map": yolo_map,
