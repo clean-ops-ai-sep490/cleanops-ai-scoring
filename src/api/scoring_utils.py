@@ -140,6 +140,58 @@ def score_image(
     }
 
 
+def _merge_reason_values(*reason_groups: Sequence[object] | None) -> List[str]:
+    seen: set[str] = set()
+    merged: List[str] = []
+    for group in reason_groups:
+        for raw in group or []:
+            item = str(raw or "").strip()
+            if not item:
+                continue
+            lowered_text = item.lower().replace("dirty_zone", "dirty area").replace("dirty zone", "dirty area")
+            item = lowered_text[0].upper() + lowered_text[1:] if lowered_text else ""
+            lowered = item.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            merged.append(item)
+    return merged
+
+
+def apply_floor_condition_severity(scoring: Dict[str, Any], visual_review: Dict[str, Any]) -> Dict[str, Any]:
+    condition = str(visual_review.get("floor_condition") or "").strip().lower()
+    needs_cleaning = bool(visual_review.get("needs_cleaning"))
+    if condition not in {"lightly_dirty", "dirty", "very_dirty"}:
+        return scoring
+
+    updated = dict(scoring)
+    pass_threshold = float(updated.get("pass_threshold", 90.0))
+    current_quality = float(updated.get("quality_score", 0.0))
+    severity_reasons: List[str] = []
+
+    if condition == "lightly_dirty":
+        if needs_cleaning and str(updated.get("verdict", "")).upper() == "PASS":
+            updated["verdict"] = "PENDING"
+            updated["quality_score"] = round(max(70.0, min(current_quality, pass_threshold - 0.5, 89.0)), 3)
+            severity_reasons.append("light visible floor marks require review")
+    elif condition == "dirty":
+        updated["verdict"] = "FAIL"
+        updated["quality_score"] = round(min(current_quality, 45.0), 3)
+        severity_reasons.append("dirty floor requires cleaning")
+    else:
+        updated["verdict"] = "FAIL"
+        updated["quality_score"] = round(min(current_quality, 35.0), 3)
+        severity_reasons.append("very dirty floor requires urgent cleaning")
+
+    existing_reasons = [
+        reason
+        for reason in updated.get("reasons", [])
+        if str(reason or "").strip().lower() != "good cleanliness"
+    ]
+    updated["reasons"] = _merge_reason_values(existing_reasons, visual_review.get("reasons", []), severity_reasons)
+    return updated
+
+
 def parse_url_items(image_urls: List[str]) -> List[str]:
     parsed: List[str] = []
     for raw in image_urls:

@@ -67,6 +67,163 @@ def _fit_text_to_width(
     return ""
 
 
+def normalize_visual_label(raw: object) -> str:
+    label = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "dirty_zone": "dirty_area",
+        "dust_patch": "dirty_area",
+        "stain": "dirty_area",
+        "stain_or_water": "dirty_area",
+        "wet_area": "wet_surface",
+        "object": "trash_like_object",
+        "trash": "trash_like_object",
+        "debris": "trash_like_object",
+        "foreign_object": "trash_like_object",
+    }
+    return aliases.get(label, label or "dirty_area")
+
+
+def visual_label_text(raw: object) -> str:
+    label = normalize_visual_label(raw)
+    labels = {
+        "dirty_area": "Dirty area",
+        "wet_surface": "Wet surface",
+        "trash_like_object": "Trash-like object",
+    }
+    return labels.get(label, label.replace("_", " ").title())
+
+
+def normalize_floor_condition(raw: object) -> str | None:
+    condition = str(raw or "").strip().lower()
+    return condition if condition in {"clean", "lightly_dirty", "dirty", "very_dirty"} else None
+
+
+def floor_condition_text(raw: object) -> str:
+    condition = normalize_floor_condition(raw)
+    labels = {
+        "clean": "Clean",
+        "lightly_dirty": "Lightly dirty",
+        "dirty": "Dirty",
+        "very_dirty": "Very dirty",
+    }
+    return labels.get(condition or "", "Unknown")
+
+
+def _normalized_reason(raw: object) -> str:
+    text = str(raw or "").strip()
+    replacements = {
+        "dirty zone": "dirty area",
+        "dirty_zone": "dirty area",
+        "trash-like objects": "trash-like object",
+    }
+    lowered = text.lower()
+    for old, new in replacements.items():
+        lowered = lowered.replace(old, new)
+    if not lowered:
+        return ""
+    return lowered[0].upper() + lowered[1:]
+
+
+def _dedupe_text(values: list[Any]) -> list[str]:
+    seen: set[str] = set()
+    items: list[str] = []
+    for raw in values:
+        item = _normalized_reason(raw)
+        if not item:
+            continue
+        lowered = item.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        items.append(item)
+    return items
+
+
+def _normalize_bbox_px(raw_bbox: Any) -> list[int] | None:
+    if not isinstance(raw_bbox, list) or len(raw_bbox) != 4:
+        return None
+    try:
+        x1, y1, x2, y2 = [int(round(float(value))) for value in raw_bbox]
+    except (TypeError, ValueError):
+        return None
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return [x1, y1, x2, y2]
+
+
+def normalize_visual_review(visual_review: Dict[str, Any] | None) -> Dict[str, Any]:
+    raw = visual_review or {}
+    condition = normalize_floor_condition(raw.get("floor_condition"))
+    needs_cleaning = bool(raw.get("needs_cleaning"))
+    reasons = _dedupe_text(list(raw.get("reasons", []) if isinstance(raw.get("reasons"), list) else []))
+    overlay_summary = _normalized_reason(raw.get("overlay_summary", ""))
+
+    evidence_regions: list[Dict[str, Any]] = []
+    for item in raw.get("advisory_dirty_boxes", []) if isinstance(raw.get("advisory_dirty_boxes"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        bbox_px = _normalize_bbox_px(item.get("bbox_px"))
+        region = {
+            "type": normalize_visual_label(item.get("label", "dirty_area")),
+            "label": visual_label_text(item.get("label", "dirty_area")),
+            "bbox_norm": item.get("bbox_norm"),
+            "bbox_px": bbox_px,
+            "reason": _normalized_reason(item.get("reason", "")),
+            "source": item.get("source") or "ai_review",
+        }
+        evidence_regions.append(region)
+
+    for item in raw.get("dirty_region_labels", []) if isinstance(raw.get("dirty_region_labels"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        evidence_regions.append(
+            {
+                "type": normalize_visual_label(item.get("label", "dirty_area")),
+                "label": visual_label_text(item.get("label", "dirty_area")),
+                "region_id": item.get("region_id"),
+                "source": "cv_region",
+            }
+        )
+
+    normalized = {
+        **raw,
+        "floor_condition": condition,
+        "floor_condition_label": floor_condition_text(condition),
+        "needs_cleaning": needs_cleaning,
+        "estimated_dirty_coverage_pct": raw.get("estimated_dirty_coverage_pct"),
+        "evidence_regions": evidence_regions,
+        "overlay_summary": overlay_summary,
+        "reasons": reasons,
+    }
+    normalized["advisory_dirty_boxes"] = [
+        ({
+            "label": normalize_visual_label(item.get("label", "dirty_area")),
+            "label_text": visual_label_text(item.get("label", "dirty_area")),
+            "bbox_norm": item.get("bbox_norm"),
+            "bbox_px": item.get("bbox_px"),
+            "reason": _normalized_reason(item.get("reason", "")),
+            "source": item.get("source") or "ai_review",
+        }
+        | (
+            {"confidence": round(float(item.get("confidence")), 3)}
+            if item.get("source") != "representative_overlay" and item.get("confidence") is not None
+            else {}
+        ))
+        for item in raw.get("advisory_dirty_boxes", [])
+        if isinstance(item, dict)
+    ]
+    normalized["dirty_region_labels"] = [
+        {
+            **item,
+            "label": normalize_visual_label(item.get("label", "dirty_area")),
+            "label_text": visual_label_text(item.get("label", "dirty_area")),
+        }
+        for item in raw.get("dirty_region_labels", [])
+        if isinstance(item, dict)
+    ]
+    return normalized
+
+
 def _draw_labeled_box(
     image: np.ndarray,
     bbox: list[int],
@@ -99,6 +256,44 @@ def _draw_labeled_box(
         text_color,
         thickness,
         cv2.LINE_AA,
+    )
+
+
+def _draw_filled_labeled_region(
+    image: np.ndarray,
+    bbox: list[int],
+    label: str,
+    color: tuple[int, int, int],
+    *,
+    font_scale: float,
+    thickness: int,
+    text_color: tuple[int, int, int],
+    padding: int,
+    fill_alpha: float = 0.22,
+) -> None:
+    x1, y1, x2, y2 = bbox
+    h, w = image.shape[:2]
+    x1 = max(0, min(w - 1, x1))
+    x2 = max(x1 + 1, min(w, x2))
+    y1 = max(0, min(h - 1, y1))
+    y2 = max(y1 + 1, min(h, y2))
+
+    region = image[y1:y2, x1:x2]
+    if region.size:
+        fill = np.full_like(region, color, dtype=np.uint8)
+        blended = cv2.addWeighted(fill, fill_alpha, region, 1.0 - fill_alpha, 0)
+        image[y1:y2, x1:x2] = blended
+
+    cv2.rectangle(image, (x1, y1), (x2, y2), color, max(1, thickness + 1))
+    _draw_labeled_box(
+        image,
+        [x1, y1, x2, y2],
+        label,
+        color,
+        font_scale=font_scale,
+        thickness=thickness,
+        text_color=text_color,
+        padding=padding,
     )
 
 
@@ -228,7 +423,7 @@ def render_hybrid_overlay(
     cv2.drawContours(composed, wet_contours, -1, (220, 200, 30), contour_thickness)
 
     dirty_region_candidates = dirty_region_candidates or []
-    visual_review = visual_review or {}
+    visual_review = normalize_visual_review(visual_review)
     penalty_detection_indexes = {
         idx
         for idx in scoring.get("penalty_detection_indexes", [])
@@ -241,7 +436,7 @@ def render_hybrid_overlay(
         item for item in visual_review.get("advisory_dirty_boxes", []) if isinstance(item, dict)
     ]
     dirty_label_map = {
-        int(item.get("region_id")): str(item.get("label", "")).strip()
+        int(item.get("region_id")): visual_label_text(item.get("label", "dirty_area"))
         for item in visual_review.get("dirty_region_labels", [])
         if isinstance(item, dict) and isinstance(item.get("region_id"), int)
     }
@@ -275,8 +470,8 @@ def render_hybrid_overlay(
             continue
 
         x1, y1, x2, y2 = [int(v) for v in candidate.get("bbox_px", [0, 0, 0, 0])]
-        label = dirty_label_map.get(region_id) or str(candidate.get("kind_hint", "dirty_zone")).replace("_", " ")
-        _draw_labeled_box(
+        label = dirty_label_map.get(region_id) or visual_label_text(candidate.get("kind_hint", "dirty_area"))
+        _draw_filled_labeled_region(
             composed,
             [x1, y1, x2, y2],
             _truncate_text(label, 28),
@@ -306,11 +501,8 @@ def render_hybrid_overlay(
 
     for item in advisory_dirty_boxes:
         x1, y1, x2, y2 = [int(v) for v in item.get("bbox_px", [0, 0, 0, 0])]
-        label = _truncate_text(
-            f"{str(item.get('label', 'dirty_zone')).replace('_', ' ')} {float(item.get('confidence', 0.0)):.2f}",
-            28,
-        )
-        _draw_labeled_box(
+        label = _truncate_text(visual_label_text(item.get("label", "dirty_area")), 28)
+        _draw_filled_labeled_region(
             composed,
             [x1, y1, x2, y2],
             label,
@@ -332,15 +524,18 @@ def render_hybrid_overlay(
     core_lines = [
         f"VERDICT: {verdict}",
         f"QUALITY SCORE: {float(scoring.get('quality_score', 0.0)):.2f}",
+        f"FLOOR CONDITION: {floor_condition_text(visual_review.get('floor_condition'))}",
         f"DIRTY COVERAGE: {float(100.0 - float(scoring.get('base_clean_score', 0.0))):.2f}%",
-        f"PENALTY OBJECTS: {int(scoring.get('penalty_detections_count', 0))}",
+        f"CLEANING REQUIRED: {'YES' if bool(visual_review.get('needs_cleaning')) else 'NO'}",
     ]
     optional_lines: list[str] = []
     if not compact_mode:
         optional_lines.append(f"OBJECT PENALTY: {float(scoring.get('object_penalty', 0.0)):.2f}")
         optional_lines.append(f"ENV: {env_key}")
+    if not compact_mode:
+        optional_lines.append(f"PENALTY OBJECTS: {int(scoring.get('penalty_detections_count', 0))}")
     if (highlight_region_ids or advisory_object_boxes or advisory_dirty_boxes) and not compact_mode:
-        optional_lines.append("AI REVIEWED OVERLAY")
+        optional_lines.append("AI REVIEWED EVIDENCE")
     overlay_summary = str(visual_review.get("overlay_summary", "")).strip()
     if overlay_summary and not compact_mode:
         optional_lines.append(f"NOTE: {_truncate_text(overlay_summary, 56)}")
@@ -419,7 +614,7 @@ def render_hybrid_overlay(
     legend_items = [
         ((30, 30, 220), "Dirty area"),
         ((220, 200, 30), "Wet surface"),
-        ((60, 200, 20), "Trash-like objects"),
+        ((60, 200, 20), "Trash-like object"),
     ]
     legend_required_height = len(legend_items) * (legend_box_size + (legend_gap // 2))
     show_legend = not compact_mode and (height - panel_y2 - panel_margin) >= legend_required_height
@@ -461,6 +656,7 @@ def build_visualize_json_payload(
     unet_result: Dict[str, Any],
     scoring: Dict[str, Any],
     rendered: bytes,
+    visual_review: Dict[str, Any] | None = None,
     llm_filter: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     image_base64 = base64.b64encode(rendered).decode("ascii")
@@ -474,6 +670,7 @@ def build_visualize_json_payload(
         "scoring": scoring,
         "yolo": yolo_result,
         "unet": unet_result["summary"],
+        "visual_review": normalize_visual_review(visual_review),
     }
     if llm_filter:
         payload.update(llm_filter)
@@ -497,6 +694,7 @@ def build_visualize_temp_url_payload(
     rendered: bytes,
     temp_visual_store: TempVisualizationStore,
     app_public_base_url: str,
+    visual_review: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     ticket = temp_visual_store.save(rendered, mime_type="image/jpeg")
     visualization_url = build_temp_visualization_url(request, ticket["token"], app_public_base_url)
@@ -516,6 +714,7 @@ def build_visualize_temp_url_payload(
         "scoring": scoring,
         "yolo": yolo_result,
         "unet": unet_result["summary"],
+        "visual_review": normalize_visual_review(visual_review),
     }
 
 
@@ -529,6 +728,7 @@ def build_visualize_blob_url_payload(
     visualization_url: str,
     mime_type: str,
     byte_size: int,
+    visual_review: Dict[str, Any] | None = None,
     llm_filter: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     payload = {
@@ -543,6 +743,7 @@ def build_visualize_blob_url_payload(
         "scoring": scoring,
         "yolo": yolo_result,
         "unet": unet_result["summary"],
+        "visual_review": normalize_visual_review(visual_review),
     }
     if llm_filter:
         payload.update(llm_filter)

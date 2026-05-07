@@ -437,8 +437,8 @@ def _build_settings() -> Settings:
             "LLM_FILTER_RETRYABLE_STATUS_CODES",
             (429, 500, 502, 503, 504),
         ),
-        llm_filter_max_image_dimension=max(256, min(2048, _as_int("LLM_FILTER_MAX_IMAGE_DIMENSION", 768))),
-        llm_filter_jpeg_quality=max(40, min(95, _as_int("LLM_FILTER_JPEG_QUALITY", 65))),
+        llm_filter_max_image_dimension=max(256, min(2048, _as_int("LLM_FILTER_MAX_IMAGE_DIMENSION", 1536))),
+        llm_filter_jpeg_quality=max(40, min(95, _as_int("LLM_FILTER_JPEG_QUALITY", 90))),
         gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
         gemini_base_url=(
             os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").strip()

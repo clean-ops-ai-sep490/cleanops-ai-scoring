@@ -35,11 +35,19 @@ def _json_candidate(text: str) -> dict[str, object]:
     }
 
 
-def _make_filter(*, queue_enabled: bool = False, deadline_sec: float = 1.0) -> GeminiLLMFilter:
+def _make_filter(
+    *,
+    queue_enabled: bool = False,
+    deadline_sec: float = 1.0,
+    mode: str = "quota_saver",
+    enable_borderline_only: bool = True,
+    max_image_dimension: int = 768,
+    jpeg_quality: int = 65,
+) -> GeminiLLMFilter:
     return GeminiLLMFilter(
         GeminiFilterConfig(
             enabled=True,
-            mode="quota_saver",
+            mode=mode,
             model="gemini-2.5-pro",
             timeout_sec=0.2,
             batch_concurrency=2,
@@ -49,14 +57,14 @@ def _make_filter(*, queue_enabled: bool = False, deadline_sec: float = 1.0) -> G
             retry_429_max_retries=0,
             retry_5xx_max_retries=1,
             cooldown_sec=90,
-            enable_borderline_only=True,
+            enable_borderline_only=enable_borderline_only,
             scoring_pass_window=10.0,
             ppe_verify_on_missing_only=True,
             retry_initial_delay_ms=10,
             retry_max_delay_ms=10,
             retryable_status_codes=(429, 500, 502, 503, 504),
-            max_image_dimension=768,
-            jpeg_quality=65,
+            max_image_dimension=max_image_dimension,
+            jpeg_quality=jpeg_quality,
             api_key="test-key",
             base_url="https://example.test/v1beta",
         ),
@@ -310,6 +318,234 @@ class GeminiLLMFilterTests(unittest.TestCase):
         self.assertEqual(len(result["review"]["advisory_dirty_boxes"]), 1)
         self.assertEqual(result["review"]["advisory_dirty_boxes"][0]["label"], "dirty_zone")
         self.assertIn("debris", result["review"]["overlay_summary"])
+
+    def test_scoring_visual_estimate_can_override_zero_cv_dirty_coverage(self):
+        force_filter = _make_filter(mode="always", enable_borderline_only=False)
+        force_filter._invoke_json = Mock(  # type: ignore[method-assign]  # noqa: SLF001
+            return_value={
+                "verified_detection_indexes": [],
+                "highlight_dirty_region_ids": [],
+                "stain_delta_pct": 0.0,
+                "wet_delta_pct": 0.0,
+                "advisory_dirty_boxes": [],
+                "overlay_summary": "visible shoe marks and gray scuffs across floor tiles",
+                "floor_condition": "dirty",
+                "estimated_dirty_coverage_pct": 12.0,
+                "needs_cleaning": True,
+                "reasons": ["visible shoe marks and gray scuffs"],
+                "confidence_note": "marks are spread across the visible floor",
+            }
+        )
+
+        result = force_filter.verify_scoring_evidence(
+            self.image,
+            env_key="LOBBY_CORRIDOR",
+            yolo_result={"detections_count": 0, "results": []},
+            unet_summary={
+                "input_size": [100, 100],
+                "model_input_size": 100,
+                "stain_or_water_coverage_pct": 0.0,
+                "wet_surface_coverage_pct": 0.0,
+                "total_dirty_coverage_pct": 0.0,
+            },
+            dirty_region_candidates=[],
+            scoring={"quality_score": 100.0, "pass_threshold": 90.0},
+            pending_lower_bound=50.0,
+            allowed_labels=["trash"],
+            label_to_id={"trash": 0},
+            source="unit-dirty-floor",
+            visualize_enhanced=True,
+        )
+
+        self.assertEqual(result["review"]["floor_condition"], "dirty")
+        self.assertTrue(result["review"]["needs_cleaning"])
+        self.assertGreaterEqual(result["summary"]["total_dirty_coverage_pct"], 12.0)
+        self.assertLess(100.0 - result["summary"]["total_dirty_coverage_pct"], 90.0)
+        self.assertIn("cleaning required", result["review"]["overlay_summary"])
+        self.assertEqual(len(result["review"]["advisory_dirty_boxes"]), 3)
+
+    def test_scoring_visual_advisory_boxes_boost_subtle_floor_marks_from_zero(self):
+        force_filter = _make_filter(mode="always", enable_borderline_only=False)
+        force_filter._invoke_json = Mock(  # type: ignore[method-assign]  # noqa: SLF001
+            return_value={
+                "verified_detection_indexes": [],
+                "highlight_dirty_region_ids": [],
+                "stain_delta_pct": 0.0,
+                "wet_delta_pct": 0.0,
+                "advisory_dirty_boxes": [
+                    {
+                        "label": "dirty_zone",
+                        "confidence": 0.82,
+                        "bbox_norm": [0.2, 0.2, 0.55, 0.55],
+                        "reason": "subtle gray shoe marks",
+                    }
+                ],
+                "overlay_summary": "subtle shoe marks near center tiles",
+                "floor_condition": "lightly_dirty",
+                "estimated_dirty_coverage_pct": 4.0,
+                "needs_cleaning": True,
+                "reasons": ["subtle gray shoe marks"],
+                "confidence_note": "localized but visible",
+            }
+        )
+
+        result = force_filter.verify_scoring_evidence(
+            self.image,
+            env_key="LOBBY_CORRIDOR",
+            yolo_result={"detections_count": 0, "results": []},
+            unet_summary={
+                "input_size": [100, 100],
+                "model_input_size": 100,
+                "stain_or_water_coverage_pct": 0.0,
+                "wet_surface_coverage_pct": 0.0,
+                "total_dirty_coverage_pct": 0.0,
+            },
+            dirty_region_candidates=[],
+            scoring={"quality_score": 100.0, "pass_threshold": 90.0},
+            pending_lower_bound=50.0,
+            allowed_labels=["trash"],
+            label_to_id={"trash": 0},
+            source="unit-subtle-floor",
+            visualize_enhanced=True,
+        )
+
+        self.assertEqual(len(result["review"]["advisory_dirty_boxes"]), 1)
+        self.assertEqual(result["review"]["floor_condition"], "lightly_dirty")
+        self.assertGreaterEqual(result["summary"]["total_dirty_coverage_pct"], 4.0)
+
+    def test_scoring_visual_lightly_dirty_needs_cleaning_at_five_pct_upgrades_to_dirty(self):
+        force_filter = _make_filter(mode="always", enable_borderline_only=False)
+        force_filter._invoke_json = Mock(  # type: ignore[method-assign]  # noqa: SLF001
+            return_value={
+                "verified_detection_indexes": [],
+                "highlight_dirty_region_ids": [],
+                "stain_delta_pct": 0.0,
+                "wet_delta_pct": 0.0,
+                "advisory_dirty_boxes": [],
+                "overlay_summary": "visible footprints and tracked dirt",
+                "floor_condition": "lightly_dirty",
+                "estimated_dirty_coverage_pct": 5.0,
+                "needs_cleaning": True,
+                "reasons": ["visible footprints", "tracked dirt"],
+                "confidence_note": "marks are repeated across tiles",
+            }
+        )
+
+        result = force_filter.verify_scoring_evidence(
+            self.image,
+            env_key="LOBBY_CORRIDOR",
+            yolo_result={"detections_count": 0, "results": []},
+            unet_summary={
+                "input_size": [100, 100],
+                "model_input_size": 100,
+                "stain_or_water_coverage_pct": 0.0,
+                "wet_surface_coverage_pct": 0.0,
+                "total_dirty_coverage_pct": 0.0,
+            },
+            dirty_region_candidates=[],
+            scoring={"quality_score": 100.0, "pass_threshold": 90.0},
+            pending_lower_bound=50.0,
+            allowed_labels=["trash"],
+            label_to_id={"trash": 0},
+            source="unit-light-upgrade",
+            visualize_enhanced=True,
+        )
+
+        self.assertEqual(result["review"]["floor_condition"], "dirty")
+        self.assertGreaterEqual(result["summary"]["total_dirty_coverage_pct"], 10.5)
+        self.assertEqual(len(result["review"]["advisory_dirty_boxes"]), 3)
+
+    def test_scoring_visual_dirty_floor_keeps_up_to_five_advisory_boxes(self):
+        force_filter = _make_filter(mode="always", enable_borderline_only=False)
+        boxes = [
+            {
+                "label": "dirty_zone",
+                "confidence": 0.82,
+                "bbox_norm": [0.05 + idx * 0.1, 0.1, 0.12 + idx * 0.1, 0.2],
+                "reason": f"dirty cluster {idx}",
+            }
+            for idx in range(6)
+        ]
+        force_filter._invoke_json = Mock(  # type: ignore[method-assign]  # noqa: SLF001
+            return_value={
+                "verified_detection_indexes": [],
+                "highlight_dirty_region_ids": [],
+                "stain_delta_pct": 0.0,
+                "wet_delta_pct": 0.0,
+                "advisory_dirty_boxes": boxes,
+                "overlay_summary": "representative dirty footprints across tiles",
+                "floor_condition": "dirty",
+                "estimated_dirty_coverage_pct": 14.0,
+                "needs_cleaning": True,
+                "reasons": ["widespread dirty footprints"],
+                "confidence_note": "multiple dirty clusters are visible",
+            }
+        )
+
+        result = force_filter.verify_scoring_evidence(
+            self.image,
+            env_key="LOBBY_CORRIDOR",
+            yolo_result={"detections_count": 0, "results": []},
+            unet_summary={
+                "input_size": [100, 100],
+                "model_input_size": 100,
+                "stain_or_water_coverage_pct": 0.0,
+                "wet_surface_coverage_pct": 0.0,
+                "total_dirty_coverage_pct": 0.0,
+            },
+            dirty_region_candidates=[],
+            scoring={"quality_score": 100.0, "pass_threshold": 90.0},
+            pending_lower_bound=50.0,
+            allowed_labels=["trash"],
+            label_to_id={"trash": 0},
+            source="unit-dirty-boxes",
+            visualize_enhanced=True,
+        )
+
+        self.assertEqual(result["review"]["floor_condition"], "dirty")
+        self.assertEqual(len(result["review"]["advisory_dirty_boxes"]), 5)
+
+    def test_scoring_visual_clean_floor_keeps_zero_cv_dirty_coverage(self):
+        force_filter = _make_filter(mode="always", enable_borderline_only=False)
+        force_filter._invoke_json = Mock(  # type: ignore[method-assign]  # noqa: SLF001
+            return_value={
+                "verified_detection_indexes": [],
+                "highlight_dirty_region_ids": [],
+                "stain_delta_pct": 0.0,
+                "wet_delta_pct": 0.0,
+                "advisory_dirty_boxes": [],
+                "overlay_summary": "clean floor with grout lines only",
+                "floor_condition": "clean",
+                "estimated_dirty_coverage_pct": 0.0,
+                "needs_cleaning": False,
+                "reasons": ["grout lines are not dirt"],
+                "confidence_note": "no visible cleaning issue",
+            }
+        )
+
+        result = force_filter.verify_scoring_evidence(
+            self.image,
+            env_key="LOBBY_CORRIDOR",
+            yolo_result={"detections_count": 0, "results": []},
+            unet_summary={
+                "input_size": [100, 100],
+                "model_input_size": 100,
+                "stain_or_water_coverage_pct": 0.0,
+                "wet_surface_coverage_pct": 0.0,
+                "total_dirty_coverage_pct": 0.0,
+            },
+            dirty_region_candidates=[],
+            scoring={"quality_score": 100.0, "pass_threshold": 90.0},
+            pending_lower_bound=50.0,
+            allowed_labels=["trash"],
+            label_to_id={"trash": 0},
+            source="unit-clean-floor",
+            visualize_enhanced=True,
+        )
+
+        self.assertEqual(result["review"]["floor_condition"], "clean")
+        self.assertFalse(result["review"]["needs_cleaning"])
+        self.assertEqual(result["summary"]["total_dirty_coverage_pct"], 0.0)
 
     @patch("src.api.llm_filter.requests.post")
     def test_invoke_json_captures_raw_preview_on_parse_failure(self, post_mock: Mock):
