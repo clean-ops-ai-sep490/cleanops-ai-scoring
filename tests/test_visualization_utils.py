@@ -80,7 +80,11 @@ class VisualizationUtilsTests(unittest.TestCase):
 
         self.assertEqual(len(drawn_boxes), 1)
         self.assertIn("trash", drawn_boxes[0][1])
-        self.assertTrue(any(text == "PENALTY OBJECTS: 1" for text in panel_texts))
+        self.assertTrue(any(text == "AI REVIEWED OVERLAY" for text in panel_texts))
+        self.assertTrue(any(text == "QUALITY SCORE: 75.00%" for text in panel_texts))
+        self.assertTrue(any(text == "DIRTY COVERAGE: 15.00%" for text in panel_texts))
+        self.assertTrue(any(text == "OBJECT PENALTY: 10.00%" for text in panel_texts))
+        self.assertFalse(any(text.startswith("PENALTY OBJECTS:") for text in panel_texts))
 
     def test_renderer_hides_ignored_objects_when_no_penalty_indexes(self):
         drawn_boxes, panel_texts, _ = self._render_with_capture(
@@ -101,7 +105,8 @@ class VisualizationUtilsTests(unittest.TestCase):
         )
 
         self.assertEqual(drawn_boxes, [])
-        self.assertTrue(any(text == "PENALTY OBJECTS: 0" for text in panel_texts))
+        self.assertTrue(any(text == "OBJECT PENALTY: 0.00%" for text in panel_texts))
+        self.assertFalse(any(text.startswith("PENALTY OBJECTS:") for text in panel_texts))
 
     def test_renderer_fills_and_labels_advisory_dirty_regions_consistently(self):
         drawn_boxes, panel_texts, rectangles = self._render_with_capture(
@@ -133,8 +138,11 @@ class VisualizationUtilsTests(unittest.TestCase):
 
         self.assertTrue(any(label == "Dirty area" for _, label in drawn_boxes))
         self.assertFalse(any("dirty zone" in label.lower() for _, label in drawn_boxes))
-        self.assertTrue(any(text == "FLOOR CONDITION: Dirty" for text in panel_texts))
-        self.assertTrue(any(text == "CLEANING REQUIRED: YES" for text in panel_texts))
+        self.assertTrue(any(text == "QUALITY SCORE: 45.00%" for text in panel_texts))
+        self.assertTrue(any(text == "DIRTY COVERAGE: 10.50%" for text in panel_texts))
+        self.assertFalse(any(text.startswith("FLOOR CONDITION:") for text in panel_texts))
+        self.assertFalse(any(text.startswith("CLEANING REQUIRED:") for text in panel_texts))
+        self.assertFalse(any(text.startswith("NOTE:") for text in panel_texts))
         self.assertTrue(any(thickness == -1 for _, _, thickness in rectangles))
 
     def test_normalize_visual_review_converts_dirty_zone_alias(self):

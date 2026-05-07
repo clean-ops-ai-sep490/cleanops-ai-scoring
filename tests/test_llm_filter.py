@@ -562,6 +562,26 @@ class GeminiLLMFilterTests(unittest.TestCase):
         self.assertIn("raw_response_preview", preview)
         self.assertIn("verified_detection_indexes", preview["raw_response_preview"])
 
+    @patch("src.api.llm_filter.requests.post")
+    def test_scoring_verification_uses_larger_output_budget(self, post_mock: Mock):
+        post_mock.return_value.raise_for_status.return_value = None
+        post_mock.return_value.json.return_value = _json_candidate(
+            '{"verified_detection_indexes":[],"highlight_dirty_region_ids":[],"stain_delta_pct":0.0,'
+            '"wet_delta_pct":0.0,"floor_condition":"clean","estimated_dirty_coverage_pct":0.0,'
+            '"needs_cleaning":false,"reasons":[],"confidence_note":""}'
+        )
+
+        result = self.filter._invoke_json(  # noqa: SLF001
+            "prompt",
+            self.image,
+            kind="scoring_verification",
+            source="unit-token-budget",
+        )
+
+        self.assertIsNotNone(result)
+        request_body = post_mock.call_args.kwargs["json"]
+        self.assertEqual(request_body["generationConfig"]["maxOutputTokens"], 1024)
+
     def test_verify_scoring_evidence_skips_confident_clean_cases(self):
         result = self.filter.verify_scoring_evidence(
             self.image,
@@ -605,6 +625,18 @@ class GeminiLLMFilterTests(unittest.TestCase):
         self.assertEqual(len(refined), 1)
         self.assertEqual(refined[0]["name"], "helmet")
         self.assertEqual(refined[0]["source"], "detector")
+
+    def test_should_verify_ppe_always_mode_does_not_skip_confident_detection(self):
+        always_filter = _make_filter(mode="always")
+
+        should_verify, skip_reason = always_filter.should_verify_ppe(
+            required_objects=["helmet"],
+            detected_items=[{"name": "helmet", "confidence": 99.0}],
+            min_confidence=25.0,
+        )
+
+        self.assertTrue(should_verify)
+        self.assertIsNone(skip_reason)
 
     def test_refine_ppe_detected_items_can_add_required_visible_item(self):
         self.filter._invoke_json = Mock(  # type: ignore[method-assign]  # noqa: SLF001

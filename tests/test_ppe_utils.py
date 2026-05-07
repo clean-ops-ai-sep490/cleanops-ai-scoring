@@ -39,6 +39,14 @@ class _AddingFilter:
         ]
 
 
+class _MetadataFilter(_AddingFilter):
+    def response_metadata(self, source: str, kinds: list[str]) -> dict[str, object]:
+        return {
+            "source": source,
+            "stages": {kind: {"status": "success"} for kind in kinds},
+        }
+
+
 class PpeUtilsTests(unittest.IsolatedAsyncioTestCase):
     @patch("src.api.ppe_utils.load_image_from_url")
     @patch("src.api.ppe_utils.collect_filtered_detections")
@@ -73,6 +81,32 @@ class PpeUtilsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["detected_items"][0]["source"], "detector")
         self.assertEqual(response["detected_items"][1]["source"], "filter")
         self.assertNotIn("llm_filter", response)
+
+    @patch("src.api.ppe_utils.load_image_from_url")
+    @patch("src.api.ppe_utils.collect_filtered_detections")
+    async def test_evaluate_ppe_payload_exposes_filter_metadata(
+        self,
+        collect_filtered_detections_mock,
+        load_image_from_url_mock,
+    ) -> None:
+        load_image_from_url_mock.return_value = Image.new("RGB", (64, 64), color=(200, 200, 200))
+        collect_filtered_detections_mock.return_value = []
+
+        response = await evaluate_ppe_payload(
+            image_urls=["https://example.test/ppe.jpg"],
+            required_objects=["gloves"],
+            model=object(),
+            timeout_sec=1,
+            min_confidence=25.0,
+            llm_filter=_MetadataFilter(),
+            allowed_labels=["gloves"],
+        )
+
+        self.assertEqual(response["llm_filter"]["route_mode"], "ppe_always_verify")
+        self.assertEqual(
+            response["llm_filter"]["images"]["0"]["stages"]["ppe_verification"]["status"],
+            "success",
+        )
 
 
 if __name__ == "__main__":
