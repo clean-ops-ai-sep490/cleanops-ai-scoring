@@ -8,7 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.api.scoring_utils import score_image, summarize_penalty_detections
+from src.api.scoring_utils import apply_floor_condition_severity, score_image, summarize_penalty_detections
 
 
 ENV_RULES = {
@@ -140,6 +140,66 @@ class ScoringUtilsTests(unittest.TestCase):
         self.assertEqual(scoring["penalty_detections_count"], 0)
         self.assertEqual(scoring["object_penalty"], 0.0)
         self.assertEqual(scoring["quality_score"], 100.0)
+
+    def test_lightly_dirty_floor_condition_downgrades_clean_pass_to_pending(self):
+        scoring = _score([])
+        adjusted = apply_floor_condition_severity(
+            scoring,
+            {
+                "floor_condition": "lightly_dirty",
+                "needs_cleaning": True,
+                "reasons": ["small localized shoe marks"],
+            },
+        )
+
+        self.assertEqual(adjusted["verdict"], "PENDING")
+        self.assertGreaterEqual(adjusted["quality_score"], 70.0)
+        self.assertLess(adjusted["quality_score"], 90.0)
+        self.assertIn("Small localized shoe marks", adjusted["reasons"])
+
+    def test_dirty_floor_condition_fails_even_when_cv_score_is_clean(self):
+        scoring = _score([])
+        adjusted = apply_floor_condition_severity(
+            scoring,
+            {
+                "floor_condition": "dirty",
+                "needs_cleaning": True,
+                "reasons": ["widespread footprints and gray scuffs"],
+            },
+        )
+
+        self.assertEqual(adjusted["verdict"], "FAIL")
+        self.assertLess(adjusted["quality_score"], 50.0)
+        self.assertNotIn("good cleanliness", adjusted["reasons"])
+        self.assertIn("Dirty floor requires cleaning", adjusted["reasons"])
+
+    def test_very_dirty_floor_condition_fails_with_urgent_score(self):
+        scoring = _score([])
+        adjusted = apply_floor_condition_severity(
+            scoring,
+            {
+                "floor_condition": "very_dirty",
+                "needs_cleaning": True,
+                "reasons": ["heavy residue across floor"],
+            },
+        )
+
+        self.assertEqual(adjusted["verdict"], "FAIL")
+        self.assertLess(adjusted["quality_score"], 40.0)
+
+    def test_clean_floor_condition_keeps_clean_pass(self):
+        scoring = _score([])
+        adjusted = apply_floor_condition_severity(
+            scoring,
+            {
+                "floor_condition": "clean",
+                "needs_cleaning": False,
+                "reasons": ["grout lines only"],
+            },
+        )
+
+        self.assertEqual(adjusted["verdict"], "PASS")
+        self.assertEqual(adjusted["quality_score"], 100.0)
 
     def test_llm_failure_fallback_uses_label_filter_not_total_detections(self):
         scoring = _score(

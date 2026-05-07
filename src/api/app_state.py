@@ -20,6 +20,7 @@ from src.api.inference_utils import (
 from src.api.llm_filter import GeminiFilterConfig, GeminiLLMFilter
 from src.api.scoring_utils import normalize_env as normalize_env_impl
 from src.api.scoring_utils import parse_url_items as parse_url_items_impl
+from src.api.scoring_utils import apply_floor_condition_severity as apply_floor_condition_severity_impl
 from src.api.scoring_utils import score_image as score_image_impl
 from src.api.scoring_utils import summarize_penalty_detections as summarize_penalty_detections_impl
 from src.api.visualization_utils import (
@@ -509,6 +510,7 @@ def evaluate_image_with_artifacts(
     )
     if not recomputed_scoring["reasons"]:
         recomputed_scoring["reasons"] = baseline_scoring.get("reasons", [])
+    recomputed_scoring = apply_floor_condition_severity_impl(recomputed_scoring, verified_bundle["review"])
 
     return verified_yolo, raw_unet_result, recomputed_scoring, dirty_region_candidates, verified_bundle["review"]
 
@@ -575,6 +577,7 @@ def build_visualize_json_payload(
     unet_result: Dict[str, Any],
     scoring: Dict[str, Any],
     rendered: bytes,
+    visual_review: Dict[str, Any] | None = None,
     llm_filter: Dict[str, Any] | None = None,
 ):
     return build_visualize_json_payload_impl(
@@ -585,6 +588,7 @@ def build_visualize_json_payload(
         unet_result=unet_result,
         scoring=scoring,
         rendered=rendered,
+        visual_review=visual_review,
         llm_filter=llm_filter,
     )
 
@@ -597,6 +601,7 @@ def build_visualize_blob_payload(
     unet_result: Dict[str, Any],
     scoring: Dict[str, Any],
     rendered: bytes,
+    visual_review: Dict[str, Any] | None = None,
     llm_filter: Dict[str, Any] | None = None,
 ):
     upload_info = VISUALIZATION_BLOB_STORE.upload_visualization(
@@ -616,5 +621,6 @@ def build_visualize_blob_payload(
         visualization_url=upload_info["url"],
         mime_type=upload_info["mime_type"],
         byte_size=upload_info["byte_size"],
+        visual_review=visual_review,
         llm_filter=llm_filter,
     )

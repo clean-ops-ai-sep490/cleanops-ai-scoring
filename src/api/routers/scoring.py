@@ -432,6 +432,7 @@ async def evaluate_visualize_json(
             unet_result=unet_result,
             scoring=scoring,
             rendered=rendered,
+            visual_review=visual_review,
             llm_filter=app_state.build_llm_filter_payload(
                 f"/evaluate-visualize-json:{file.filename or 'upload'}",
                 kinds=["scoring_verification"],
@@ -479,6 +480,7 @@ async def evaluate_url_visualize_json(payload: EvaluateVisualizeRequest):
             unet_result=unet_result,
             scoring=scoring,
             rendered=rendered,
+            visual_review=visual_review,
             llm_filter=app_state.build_llm_filter_payload(
                 f"/evaluate-url-visualize-json:{payload.url}",
                 kinds=["scoring_verification"],
@@ -535,6 +537,7 @@ async def evaluate_visualize_link(
             unet_result=unet_result,
             scoring=scoring,
             rendered=rendered,
+            visual_review=visual_review,
             llm_filter=app_state.build_llm_filter_payload(
                 f"/evaluate-visualize-link:{file.filename or 'upload'}",
                 kinds=["scoring_verification"],
@@ -582,6 +585,7 @@ async def evaluate_url_visualize_link(payload: EvaluateVisualizeRequest):
             unet_result=unet_result,
             scoring=scoring,
             rendered=rendered,
+            visual_review=visual_review,
             llm_filter=app_state.build_llm_filter_payload(
                 f"/evaluate-url-visualize-link:{payload.url}",
                 kinds=["scoring_verification"],

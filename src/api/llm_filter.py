@@ -16,6 +16,13 @@ from PIL import Image
 
 ADVISORY_OBJECT_LABELS = {"trash", "debris", "tool", "foreign_object"}
 ADVISORY_DIRTY_LABELS = {"stain", "wet_area", "dust_patch", "dirty_zone"}
+PUBLIC_DIRTY_LABEL = "dirty_area"
+FLOOR_CONDITIONS = {"clean", "lightly_dirty", "dirty", "very_dirty"}
+FLOOR_CONDITION_COVERAGE_BOUNDS = {
+    "lightly_dirty": (3.0, 8.0),
+    "dirty": (10.5, 18.0),
+    "very_dirty": (20.0, 40.0),
+}
 
 YOLO_VERIFY_SYSTEM_PROMPT = (
     "You are an image-quality observer that verifies computer-vision detections.\n"
@@ -42,11 +49,11 @@ PPE_VERIFY_SYSTEM_PROMPT = (
 )
 
 SCORING_VERIFY_SYSTEM_PROMPT = (
-    "You are a quota-aware image-quality observer that verifies computer-vision evidence for cleanliness scoring.\n"
-    "You must improve reliability without inventing new scoring rules.\n"
-    "Use the provided YOLO label whitelist and dirty-region candidates as grounding.\n"
-    "Keep only visible trash-like cleanliness evidence such as metal, paper, plastic, trash, marks, debris, or waste.\n"
-    "Reject detections that are actually a toilet, sink, fixture, furniture, background, floor pattern, or scene structure.\n"
+    "You are a strict facility-cleanliness inspector for floor images.\n"
+    "Use the image as the primary evidence. Treat YOLO detections, U-Net coverage, and region candidates as hints, not limits.\n"
+    "Visible footprints, shoe marks, scuff marks, gray smudges, tracked dirt, dust streaks, mud traces, stains, wet patches, debris, and waste are cleanliness evidence.\n"
+    "Reject only grout lines, tile texture, reflections, shadows, lighting gradients, and permanent floor pattern.\n"
+    "Estimate the real visible floor condition even when the provided CV evidence reports zero dirty coverage.\n"
     "Only return the minimal JSON fields requested.\n"
     "Do not include markdown, explanations, comments, or extra keys.\n"
     "Return strict JSON only."
@@ -425,35 +432,53 @@ class GeminiLLMFilter:
         }
         if visualize_enhanced:
             prompt = (
-                "Verify the object and dirty-area evidence used for cleanliness scoring, and improve the final visualization.\n"
+                "Judge the visible floor cleanliness and improve the final visualization.\n"
                 "Return exactly one JSON object with only these keys:\n"
                 '{"verified_detection_indexes":[],"highlight_dirty_region_ids":[],"stain_delta_pct":0.0,"wet_delta_pct":0.0,'
-                '"advisory_dirty_boxes":[],"overlay_summary":"","reasons":[],"confidence_note":""}\n'
+                '"advisory_dirty_boxes":[],"overlay_summary":"","floor_condition":"clean|lightly_dirty|dirty|very_dirty",'
+                '"estimated_dirty_coverage_pct":0.0,"needs_cleaning":false,"reasons":[],"confidence_note":""}\n'
                 "Rules:\n"
-                "- Keep only detections that clearly match allowed labels.\n"
-                "- Keep only visible trash-like cleanliness evidence: metal, paper, plastic, trash, marks, debris, or waste.\n"
-                "- Reject toilet, sink, fixture, furniture, architecture, floor pattern, and background false positives.\n"
+                "- Use the image as primary evidence; CV detections and dirty summary are hints, not limits.\n"
+                "- Treat footprints, shoe marks, scuff marks, gray smudges, tracked dirt, dust streaks, mud traces, stains, wet patches, debris, and waste as dirt evidence.\n"
+                "- Reject grout lines, tile texture, reflections, shadows, lighting gradients, permanent floor pattern, furniture, fixtures, and architecture.\n"
+                "- Keep object detections only when they clearly match allowed labels.\n"
                 "- highlight_dirty_region_ids must only reference provided region IDs.\n"
-                "- stain_delta_pct and wet_delta_pct must be small guarded corrections, usually between -5 and 5.\n"
-                "- You may add at most 2 advisory dirty boxes only when the image visibly supports them.\n"
+                "- stain_delta_pct and wet_delta_pct should be guarded corrections, usually between -5 and 8.\n"
+                "- For dirty or very_dirty floors, return 2 to 5 advisory dirty boxes only when you can localize representative visible dirty/scuffed floor regions.\n"
+                "- If the floor is dirty but exact regions are not localizable, keep advisory_dirty_boxes empty and explain the scene-level assessment in overlay_summary and reasons.\n"
                 "- advisory dirty labels: stain, wet_area, dust_patch, dirty_zone.\n"
-                "- advisory boxes must be approximate rectangles in normalized coordinates [x1,y1,x2,y2].\n"
+                "- advisory boxes must be honest approximate rectangles in normalized coordinates [x1,y1,x2,y2]; never add decorative or arbitrary boxes.\n"
+                "- floor_condition clean means no clear cleanliness issue.\n"
+                "- floor_condition lightly_dirty means only a few small localized marks that are still temporarily acceptable.\n"
+                "- floor_condition dirty means many footprints, gray scuffs, small debris, or tracked dirt spread across multiple areas and requiring cleaning.\n"
+                "- floor_condition very_dirty means heavy residue, large dirty patches, mud/water/trash, or a safety risk.\n"
+                "- Repeated marks across multiple tiles must be dirty, not lightly_dirty.\n"
+                "- estimated_dirty_coverage_pct is your visual estimate of affected floor area, not the raw CV number.\n"
+                "- needs_cleaning must be true for dirty or very_dirty, and for lightly_dirty when marks are noticeable in a lobby/corridor.\n"
                 "- overlay_summary must be one short sentence for the panel note.\n"
-                "- If unsure, return empty arrays and zero deltas.\n"
                 f"Evidence JSON:\n{json.dumps(prompt_payload, ensure_ascii=False)}"
             )
         else:
             prompt = (
-                "Verify both object detections and dirty-area evidence used for cleanliness scoring.\n"
+                "Judge the visible floor cleanliness and verify object or dirty-area evidence used for scoring.\n"
                 "Return exactly one JSON object with only these keys:\n"
-                '{"verified_detection_indexes":[],"highlight_dirty_region_ids":[],"stain_delta_pct":0.0,"wet_delta_pct":0.0,"reasons":[],"confidence_note":""}\n'
+                '{"verified_detection_indexes":[],"highlight_dirty_region_ids":[],"stain_delta_pct":0.0,"wet_delta_pct":0.0,'
+                '"floor_condition":"clean|lightly_dirty|dirty|very_dirty","estimated_dirty_coverage_pct":0.0,'
+                '"needs_cleaning":false,"reasons":[],"confidence_note":""}\n'
                 "Rules:\n"
-                "- Keep only detections that clearly match allowed labels.\n"
-                "- Keep only visible trash-like cleanliness evidence: metal, paper, plastic, trash, marks, debris, or waste.\n"
-                "- Reject toilet, sink, fixture, furniture, architecture, floor pattern, and background false positives.\n"
+                "- Use the image as primary evidence; CV detections and dirty summary are hints, not limits.\n"
+                "- Treat footprints, shoe marks, scuff marks, gray smudges, tracked dirt, dust streaks, mud traces, stains, wet patches, debris, and waste as dirt evidence.\n"
+                "- Reject grout lines, tile texture, reflections, shadows, lighting gradients, permanent floor pattern, furniture, fixtures, and architecture.\n"
+                "- Keep object detections only when they clearly match allowed labels.\n"
                 "- highlight_dirty_region_ids must only reference provided region IDs.\n"
-                "- stain_delta_pct and wet_delta_pct must be small corrections, usually between -5 and 5.\n"
-                "- If unsure, return empty arrays and zero deltas.\n"
+                "- stain_delta_pct and wet_delta_pct should be guarded corrections, usually between -5 and 8.\n"
+                "- floor_condition clean means no clear cleanliness issue.\n"
+                "- floor_condition lightly_dirty means only a few small localized marks that are still temporarily acceptable.\n"
+                "- floor_condition dirty means many footprints, gray scuffs, small debris, or tracked dirt spread across multiple areas and requiring cleaning.\n"
+                "- floor_condition very_dirty means heavy residue, large dirty patches, mud/water/trash, or a safety risk.\n"
+                "- Repeated marks across multiple tiles must be dirty, not lightly_dirty.\n"
+                "- estimated_dirty_coverage_pct is your visual estimate of affected floor area, not the raw CV number.\n"
+                "- needs_cleaning must be true for dirty or very_dirty, and for lightly_dirty when marks are noticeable in a lobby/corridor.\n"
                 f"Evidence JSON:\n{json.dumps(prompt_payload, ensure_ascii=False)}"
             )
         parsed = self._invoke_json(
@@ -701,11 +726,12 @@ class GeminiLLMFilter:
         raw_wet = _safe_float(summary.get("wet_surface_coverage_pct"))
         raw_total = _safe_float(summary.get("total_dirty_coverage_pct"))
 
-        valid_region_ids = {
-            _safe_int(item.get("region_id"))
+        valid_region_map = {
+            _safe_int(item.get("region_id")): item
             for item in dirty_region_candidates
             if isinstance(item, dict)
         }
+        valid_region_ids = set(valid_region_map)
         highlight_ids_raw = parsed.get("highlight_dirty_region_ids")
         highlight_dirty_region_ids = [
             idx
@@ -722,17 +748,37 @@ class GeminiLLMFilter:
             label = str(item.get("label", "")).strip().lower()
             if region_id not in valid_region_ids or label not in ADVISORY_DIRTY_LABELS:
                 continue
-            dirty_region_labels.append({"region_id": region_id, "label": label})
+            region_label = {"region_id": region_id, "label": label}
+            candidate = valid_region_map.get(region_id) or {}
+            bbox_norm = _sanitize_bbox_norm(candidate.get("bbox_norm"))
+            if bbox_norm is not None:
+                region_label["bbox_norm"] = bbox_norm
+                region_label["bbox_px"] = _bbox_norm_to_px(bbox_norm, image.size)
+            dirty_region_labels.append(region_label)
 
         advisory_dirty_boxes = self._sanitize_advisory_boxes(
             parsed.get("advisory_dirty_boxes", []),
             allowed_labels=ADVISORY_DIRTY_LABELS,
-            max_items=3,
+            max_items=5,
             image_size=image.size,
         )
 
         stain_delta = _clamp(_safe_float(parsed.get("stain_delta_pct")), -15.0, 15.0)
         wet_delta = _clamp(_safe_float(parsed.get("wet_delta_pct")), -15.0, 15.0)
+        floor_condition = str(parsed.get("floor_condition", "")).strip().lower()
+        if floor_condition not in FLOOR_CONDITIONS:
+            floor_condition = ""
+        estimated_dirty = _safe_float(parsed.get("estimated_dirty_coverage_pct"), -1.0)
+        if estimated_dirty >= 0.0:
+            estimated_dirty = _clamp(estimated_dirty, 0.0, 100.0)
+        needs_cleaning_raw = parsed.get("needs_cleaning")
+        needs_cleaning = (
+            bool(needs_cleaning_raw)
+            if isinstance(needs_cleaning_raw, bool)
+            else floor_condition in {"dirty", "very_dirty"}
+        )
+        if floor_condition == "lightly_dirty" and needs_cleaning and estimated_dirty >= 5.0:
+            floor_condition = "dirty"
 
         for item in advisory_dirty_boxes:
             bbox_norm = item.get("bbox_norm", [0.0, 0.0, 0.0, 0.0])
@@ -749,7 +795,26 @@ class GeminiLLMFilter:
         adjusted_stain = _clamp(raw_stain + stain_delta, max(0.0, raw_stain - 15.0), min(100.0, raw_stain + 15.0))
         adjusted_wet = _clamp(raw_wet + wet_delta, max(0.0, raw_wet - 15.0), min(100.0, raw_wet + 15.0))
         adjusted_total = adjusted_stain + adjusted_wet
-        max_total = min(100.0, raw_total + 15.0)
+        visual_target_total: float | None = None
+        if floor_condition in FLOOR_CONDITION_COVERAGE_BOUNDS:
+            lower_bound, upper_bound = FLOOR_CONDITION_COVERAGE_BOUNDS[floor_condition]
+            estimate_or_default = estimated_dirty if estimated_dirty >= 0.0 else lower_bound
+            visual_target_total = _clamp(estimate_or_default, lower_bound, upper_bound)
+            if needs_cleaning and floor_condition == "lightly_dirty":
+                visual_target_total = max(visual_target_total, FLOOR_CONDITION_COVERAGE_BOUNDS["dirty"][0])
+        elif needs_cleaning and estimated_dirty >= 3.0:
+            visual_target_total = max(min(estimated_dirty, 18.0), FLOOR_CONDITION_COVERAGE_BOUNDS["dirty"][0])
+
+        if visual_target_total is not None and visual_target_total > adjusted_total:
+            if adjusted_total > 0:
+                stain_ratio = adjusted_stain / adjusted_total
+            else:
+                stain_ratio = 0.85
+            adjusted_stain = visual_target_total * stain_ratio
+            adjusted_wet = visual_target_total - adjusted_stain
+            adjusted_total = visual_target_total
+
+        max_total = min(100.0, max(raw_total + 15.0, visual_target_total or 0.0))
         min_total = max(0.0, raw_total - 15.0)
 
         if adjusted_total > 0 and adjusted_total > max_total:
@@ -770,6 +835,13 @@ class GeminiLLMFilter:
         deduped_reasons = _dedupe_strings(reasons) if isinstance(reasons, list) else []
         confidence_note = str(parsed.get("confidence_note", "")).strip()[:120]
         overlay_summary = "; ".join([*deduped_reasons[:2], confidence_note]).strip("; ")
+        localized_evidence_count = len(advisory_dirty_boxes) + len(highlight_dirty_region_ids)
+        scene_level_note = ""
+        if floor_condition in {"dirty", "very_dirty"} and localized_evidence_count == 0:
+            scene_level_note = "Scene-level assessment: widespread footprints/scuff marks; no exact regions drawn."
+            reason_note = "Visible widespread footprints/scuff marks; cleaning required"
+            overlay_summary = "; ".join([scene_level_note, overlay_summary]).strip("; ")
+            deduped_reasons = _dedupe_strings([reason_note, *deduped_reasons])
 
         refined = {
             **summary,
@@ -787,6 +859,12 @@ class GeminiLLMFilter:
             "overlay_summary": overlay_summary[:140],
             "reasons": deduped_reasons,
             "confidence_note": confidence_note,
+            "floor_condition": floor_condition or None,
+            "estimated_dirty_coverage_pct": round(estimated_dirty, 3) if estimated_dirty >= 0.0 else None,
+            "needs_cleaning": needs_cleaning,
+            "evidence_mode": "localized_evidence" if localized_evidence_count else "scene_level_assessment",
+            "localized_evidence_count": localized_evidence_count,
+            "scene_level_assessment": scene_level_note,
         }
         self._logger.info(
             "llm_filter=applied kind=%s source=%s raw_total=%.3f refined_total=%.3f advisory_dirty=%s model=%s",
@@ -951,7 +1029,7 @@ class GeminiLLMFilter:
             "Your job is to make the final visualization more trustworthy for a human reviewer.\n"
             "You must ONLY verify or reject existing computer-vision evidence, and you may add a small number of\n"
             "advisory approximate rectangles when the image clearly shows dirty areas or foreign objects that CV missed.\n"
-            "Never invent polygons, never use full-image boxes, and never add more than 2 advisory object boxes or 3 advisory dirty boxes.\n"
+            "Never invent polygons, never use full-image boxes, and never add more than 2 advisory object boxes or 5 advisory dirty boxes.\n"
             "Allowed advisory object labels: trash, debris, tool, foreign_object.\n"
             "Allowed advisory dirty labels: stain, wet_area, dust_patch, dirty_zone.\n"
             "Only add advisory boxes when the image visibly supports them. If unsure, return empty arrays.\n"
@@ -1013,7 +1091,7 @@ class GeminiLLMFilter:
         advisory_dirty_boxes = self._sanitize_advisory_boxes(
             parsed.get("advisory_dirty_boxes", []),
             allowed_labels=ADVISORY_DIRTY_LABELS,
-            max_items=3,
+            max_items=5,
             image_size=image_size,
         )
         overlay_summary = str(parsed.get("overlay_summary", "")).strip()
@@ -1661,6 +1739,9 @@ class GeminiLLMFilter:
             "highlight_dirty_region_ids": {"type": "array", "items": {"type": "integer"}},
             "stain_delta_pct": {"type": "number"},
             "wet_delta_pct": {"type": "number"},
+            "floor_condition": {"type": "string", "enum": sorted(FLOOR_CONDITIONS)},
+            "estimated_dirty_coverage_pct": {"type": "number"},
+            "needs_cleaning": {"type": "boolean"},
             "reasons": {"type": "array", "items": {"type": "string"}},
             "confidence_note": {"type": "string"},
         }
@@ -1669,6 +1750,9 @@ class GeminiLLMFilter:
             "highlight_dirty_region_ids",
             "stain_delta_pct",
             "wet_delta_pct",
+            "floor_condition",
+            "estimated_dirty_coverage_pct",
+            "needs_cleaning",
             "reasons",
             "confidence_note",
         ]
