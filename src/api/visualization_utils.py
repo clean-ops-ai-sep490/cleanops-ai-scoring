@@ -513,32 +513,14 @@ def render_hybrid_overlay(
             padding=label_padding,
         )
 
-    verdict = str(scoring.get("verdict", "UNKNOWN")).upper()
-    verdict_colors = {
-        "PASS": (60, 175, 60),
-        "PENDING": (0, 165, 255),
-        "FAIL": (40, 40, 220),
-    }
-    verdict_color = verdict_colors.get(verdict, (180, 180, 180))
-
     core_lines = [
-        f"VERDICT: {verdict}",
-        f"QUALITY SCORE: {float(scoring.get('quality_score', 0.0)):.2f}",
-        f"FLOOR CONDITION: {floor_condition_text(visual_review.get('floor_condition'))}",
+        "AI REVIEWED OVERLAY",
+        f"QUALITY SCORE: {float(scoring.get('quality_score', 0.0)):.2f}%",
         f"DIRTY COVERAGE: {float(100.0 - float(scoring.get('base_clean_score', 0.0))):.2f}%",
-        f"CLEANING REQUIRED: {'YES' if bool(visual_review.get('needs_cleaning')) else 'NO'}",
+        f"OBJECT PENALTY: {float(scoring.get('object_penalty', 0.0)):.2f}%",
     ]
     optional_lines: list[str] = []
-    if not compact_mode:
-        optional_lines.append(f"OBJECT PENALTY: {float(scoring.get('object_penalty', 0.0)):.2f}")
-        optional_lines.append(f"ENV: {env_key}")
-    if not compact_mode:
-        optional_lines.append(f"PENALTY OBJECTS: {int(scoring.get('penalty_detections_count', 0))}")
-    if (highlight_region_ids or advisory_object_boxes or advisory_dirty_boxes) and not compact_mode:
-        optional_lines.append("AI REVIEWED EVIDENCE")
-    overlay_summary = str(visual_review.get("overlay_summary", "")).strip()
-    if overlay_summary and not compact_mode:
-        optional_lines.append(f"NOTE: {_truncate_text(overlay_summary, 56)}")
+    panel_accent_color = (0, 165, 255)
 
     max_panel_height = int(height * (0.30 if compact_mode else 0.42))
     max_panel_width = max(170, min(420, int(width * 0.42)))
@@ -593,12 +575,12 @@ def render_hybrid_overlay(
 
     panel_y2 = min(height - panel_margin, panel_y1 + current_panel_height)
     cv2.rectangle(composed, (panel_x1, panel_y1), (panel_x2, panel_y2), (20, 20, 20), -1)
-    cv2.rectangle(composed, (panel_x1, panel_y1), (panel_x2, panel_y2), verdict_color, panel_thickness)
+    cv2.rectangle(composed, (panel_x1, panel_y1), (panel_x2, panel_y2), panel_accent_color, panel_thickness)
 
     y_text = panel_y1 + panel_padding
     for row in rendered_rows:
         baseline_y = y_text + row["text_h"]
-        color = verdict_color if row["text"].startswith("VERDICT:") else (255, 255, 255)
+        color = panel_accent_color if row["text"].startswith("AI REVIEWED") else (255, 255, 255)
         cv2.putText(
             composed,
             row["text"],

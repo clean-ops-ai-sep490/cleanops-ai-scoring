@@ -191,5 +191,16 @@ async def evaluate_ppe_payload(
     }
     if failed_images:
         response["failed_images"] = failed_images
+    if llm_filter is not None and hasattr(llm_filter, "response_metadata"):
+        response["llm_filter"] = {
+            "route_mode": "ppe_always_verify",
+            "images": {
+                str(image_index): llm_filter.response_metadata(
+                    f"ppe[{image_index}]",
+                    ["ppe_verification"],
+                )
+                for image_index in range(len(image_urls))
+            },
+        }
 
     return response

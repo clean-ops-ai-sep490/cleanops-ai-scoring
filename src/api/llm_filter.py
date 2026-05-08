@@ -110,6 +110,14 @@ def _preview_raw_response(raw: str | None, *, limit: int = 280) -> str | None:
     return compact[:limit]
 
 
+def _max_output_tokens_for_kind(kind: str) -> int:
+    if kind in {"scoring_verification", "visual"}:
+        return 1024
+    if kind in {"yolo_verification", "dirty_verification", "ppe_verification"}:
+        return 768
+    return 384
+
+
 def _dedupe_strings(values: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
@@ -344,6 +352,10 @@ class GeminiLLMFilter:
         detected_items: Sequence[dict[str, Any]],
         min_confidence: float,
     ) -> tuple[bool, str | None]:
+        if not self.enabled:
+            return False, "disabled"
+        if not self.configured:
+            return False, "not_configured"
         if self._is_cooldown_active():
             return False, "429_circuit_open"
         if self._config.mode != "quota_saver" or not self._config.ppe_verify_on_missing_only:
@@ -455,7 +467,7 @@ class GeminiLLMFilter:
                 "- Repeated marks across multiple tiles must be dirty, not lightly_dirty.\n"
                 "- estimated_dirty_coverage_pct is your visual estimate of affected floor area, not the raw CV number.\n"
                 "- needs_cleaning must be true for dirty or very_dirty, and for lightly_dirty when marks are noticeable in a lobby/corridor.\n"
-                "- overlay_summary must be one short sentence for the panel note.\n"
+                "- overlay_summary must be one short sentence. Keep every reason under 12 words.\n"
                 f"Evidence JSON:\n{json.dumps(prompt_payload, ensure_ascii=False)}"
             )
         else:
@@ -1266,7 +1278,7 @@ class GeminiLLMFilter:
             "generationConfig": {
                 "temperature": 0,
                 "responseMimeType": "application/json",
-                "maxOutputTokens": 384,
+                "maxOutputTokens": _max_output_tokens_for_kind(kind),
             },
         }
         if response_schema:
@@ -1668,22 +1680,13 @@ class GeminiLLMFilter:
     def _preview_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         def _limit(value: Any) -> Any:
             if isinstance(value, dict):
-                limited: dict[str, Any] = {}
-                for idx, (key, item) in enumerate(value.items()):
-                    if idx >= 8:
-                        limited["_truncated"] = True
-                        break
-                    if item is None:
-                        continue
-                    limited[str(key)] = _limit(item)
-                return limited
+                return {
+                    str(key): _limit(item)
+                    for key, item in value.items()
+                    if item is not None
+                }
             if isinstance(value, list):
-                items = [_limit(item) for item in value[:4]]
-                if len(value) > 4:
-                    items.append("...truncated...")
-                return items
-            if isinstance(value, str):
-                return value[:160]
+                return [_limit(item) for item in value]
             return value
 
         return _limit(payload)
@@ -1735,15 +1738,15 @@ class GeminiLLMFilter:
 
     def _build_scoring_verification_schema(self, *, visualize_enhanced: bool = False) -> dict[str, Any]:
         properties: dict[str, Any] = {
-            "verified_detection_indexes": {"type": "array", "items": {"type": "integer"}},
-            "highlight_dirty_region_ids": {"type": "array", "items": {"type": "integer"}},
+            "verified_detection_indexes": {"type": "array", "items": {"type": "integer"}, "maxItems": 8},
+            "highlight_dirty_region_ids": {"type": "array", "items": {"type": "integer"}, "maxItems": 8},
             "stain_delta_pct": {"type": "number"},
             "wet_delta_pct": {"type": "number"},
             "floor_condition": {"type": "string", "enum": sorted(FLOOR_CONDITIONS)},
             "estimated_dirty_coverage_pct": {"type": "number"},
             "needs_cleaning": {"type": "boolean"},
-            "reasons": {"type": "array", "items": {"type": "string"}},
-            "confidence_note": {"type": "string"},
+            "reasons": {"type": "array", "items": {"type": "string", "maxLength": 80}, "maxItems": 3},
+            "confidence_note": {"type": "string", "maxLength": 120},
         }
         required = [
             "verified_detection_indexes",
@@ -1760,7 +1763,7 @@ class GeminiLLMFilter:
             properties.update(
                 {
                     "advisory_dirty_boxes": self._build_advisory_box_array_schema(sorted(ADVISORY_DIRTY_LABELS)),
-                    "overlay_summary": {"type": "string"},
+                    "overlay_summary": {"type": "string", "maxLength": 120},
                 }
             )
             required.extend(
@@ -1792,6 +1795,7 @@ class GeminiLLMFilter:
     def _build_advisory_box_array_schema(self, allowed_labels: Sequence[str]) -> dict[str, Any]:
         return {
             "type": "array",
+            "maxItems": 5,
             "items": {
                 "type": "object",
                 "properties": {
@@ -1803,7 +1807,7 @@ class GeminiLLMFilter:
                         "minItems": 4,
                         "maxItems": 4,
                     },
-                    "reason": {"type": "string"},
+                    "reason": {"type": "string", "maxLength": 80},
                 },
                 "required": ["label", "confidence", "bbox_norm", "reason"],
             },

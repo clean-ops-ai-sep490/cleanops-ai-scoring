@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional
 
@@ -81,6 +81,11 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Only include annotations with approvedAtUtc >= YYYY-MM-DD",
     )
+    parser.add_argument(
+        "--only-after-utc",
+        default="",
+        help="Only include annotations with approvedAtUtc >= this ISO-8601 UTC timestamp",
+    )
     return parser.parse_args()
 
 
@@ -117,6 +122,12 @@ def parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(candidate.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def to_naive_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def read_json_blob(container: BlobContainerClient, key: str) -> Dict[str, Any]:
@@ -376,7 +387,15 @@ def main() -> None:
         raise ValueError("valid-ratio must be >= 0 and train-ratio + valid-ratio must be < 1")
 
     only_after = None
+    if args.only_after_utc:
+        only_after = parse_iso_datetime(args.only_after_utc)
+        if only_after is None:
+            raise ValueError("only-after-utc must be a valid ISO-8601 timestamp")
+        only_after = to_naive_utc(only_after)
+
     if args.only_after_date:
+        if only_after is not None:
+            raise ValueError("Use only one of --only-after-date or --only-after-utc")
         try:
             only_after = datetime.strptime(args.only_after_date, "%Y-%m-%d")
         except ValueError as exc:
@@ -420,7 +439,7 @@ def main() -> None:
 
             approved_at_dt = parse_iso_datetime(item.approved_at_utc)
             if only_after is not None and approved_at_dt is not None:
-                if approved_at_dt.replace(tzinfo=None) < only_after:
+                if to_naive_utc(approved_at_dt) < only_after:
                     skipped += 1
                     continue
 
@@ -504,6 +523,7 @@ def main() -> None:
         "train_ratio": args.train_ratio,
         "valid_ratio": args.valid_ratio,
         "only_after_date": args.only_after_date or None,
+        "only_after_utc": args.only_after_utc or None,
         "processed_items": processed,
         "exported_annotation_items": exported,
         "empty_label_items": empty_label_items,
