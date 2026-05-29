@@ -40,6 +40,14 @@ DIRTY_LEVEL_ALIASES = (
     "cleanliness_bucket",
     "case_bucket",
 )
+DIRTY_COVERAGE_SOURCE_ALIASES = ("dirty_coverage_source",)
+UNET_COVERAGE_ALIASES = ("unet_dirty_coverage_pct",)
+SAM3_COVERAGE_ALIASES = ("sam3_dirty_coverage_pct",)
+COMBINED_COVERAGE_ALIASES = ("combined_dirty_coverage_pct", "total_dirty_coverage_pct")
+SAM3_STATUS_ALIASES = ("sam3_status",)
+SAM3_PREDICTIONS_ALIASES = ("sam3_predictions_count",)
+SAM3_ELAPSED_ALIASES = ("sam3_elapsed_ms",)
+CALIBRATED_ALIASES = ("calibrated",)
 
 
 def _first_value(row: dict[str, str], aliases: Iterable[str], default: str = "") -> str:
@@ -67,6 +75,10 @@ def _parse_float(raw: str) -> float | None:
         return None
 
 
+def _parse_bool(raw: str) -> bool:
+    return (raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _safe_rate(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
@@ -81,10 +93,11 @@ def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 def build_summary(rows: list[dict[str, str]]) -> dict:
-    total = len(rows)
-    if total == 0:
+    total_input = len(rows)
+    if total_input == 0:
         raise ValueError("Input CSV contains no data rows.")
 
+    skipped_rows: list[dict[str, str]] = []
     confusion = {expected: {predicted: 0 for predicted in VERDICTS} for expected in VERDICTS}
     predicted_counts = Counter()
     expected_counts = Counter()
@@ -110,6 +123,20 @@ def build_summary(rows: list[dict[str, str]]) -> dict:
     latency_samples = 0
     quality_total = 0.0
     quality_samples = 0
+    evaluated_total = 0
+    dirty_coverage_source_counts = Counter()
+    sam3_status_counts = Counter()
+    unet_coverage_total = 0.0
+    unet_coverage_samples = 0
+    sam3_coverage_total = 0.0
+    sam3_coverage_samples = 0
+    combined_coverage_total = 0.0
+    combined_coverage_samples = 0
+    sam3_elapsed_total = 0.0
+    sam3_elapsed_samples = 0
+    sam3_predictions_total = 0.0
+    sam3_predictions_samples = 0
+    calibrated_count = 0
 
     for row in rows:
         expected = _normalize_verdict(_first_value(row, EXPECTED_VERDICT_ALIASES))
@@ -117,11 +144,19 @@ def build_summary(rows: list[dict[str, str]]) -> dict:
         environment = _first_value(row, ENVIRONMENT_ALIASES, default="UNKNOWN")
         dirty_level = _first_value(row, DIRTY_LEVEL_ALIASES, default="UNSPECIFIED")
 
-        if expected not in VERDICTS:
-            raise ValueError(f"Unsupported expected verdict '{expected}'.")
-        if predicted not in VERDICTS:
-            raise ValueError(f"Unsupported predicted verdict '{predicted}'.")
+        if expected not in VERDICTS or predicted not in VERDICTS:
+            skipped_rows.append(
+                {
+                    "image_id": _first_value(row, ("image_id", "id"), default=""),
+                    "expected_verdict": expected,
+                    "predicted_verdict": predicted,
+                    "reason": "missing_or_invalid_verdict",
+                    "notes": row.get("notes", ""),
+                }
+            )
+            continue
 
+        evaluated_total += 1
         expected_counts[expected] += 1
         predicted_counts[predicted] += 1
         confusion[expected][predicted] += 1
@@ -159,20 +194,80 @@ def build_summary(rows: list[dict[str, str]]) -> dict:
             quality_total += quality_score
             quality_samples += 1
 
+        dirty_coverage_source = _first_value(row, DIRTY_COVERAGE_SOURCE_ALIASES, default="UNKNOWN")
+        dirty_coverage_source_counts[dirty_coverage_source] += 1
+
+        sam3_status = _first_value(row, SAM3_STATUS_ALIASES, default="UNKNOWN")
+        sam3_status_counts[sam3_status] += 1
+
+        if _parse_bool(_first_value(row, CALIBRATED_ALIASES)):
+            calibrated_count += 1
+
+        unet_coverage = _parse_float(_first_value(row, UNET_COVERAGE_ALIASES))
+        if unet_coverage is not None:
+            unet_coverage_total += unet_coverage
+            unet_coverage_samples += 1
+
+        sam3_coverage = _parse_float(_first_value(row, SAM3_COVERAGE_ALIASES))
+        if sam3_coverage is not None:
+            sam3_coverage_total += sam3_coverage
+            sam3_coverage_samples += 1
+
+        combined_coverage = _parse_float(_first_value(row, COMBINED_COVERAGE_ALIASES))
+        if combined_coverage is not None:
+            combined_coverage_total += combined_coverage
+            combined_coverage_samples += 1
+
+        sam3_elapsed = _parse_float(_first_value(row, SAM3_ELAPSED_ALIASES))
+        if sam3_elapsed is not None:
+            sam3_elapsed_total += sam3_elapsed
+            sam3_elapsed_samples += 1
+
+        sam3_predictions = _parse_float(_first_value(row, SAM3_PREDICTIONS_ALIASES))
+        if sam3_predictions is not None:
+            sam3_predictions_total += sam3_predictions
+            sam3_predictions_samples += 1
+
+    if evaluated_total == 0:
+        raise ValueError("Input CSV contains no rows with valid expected and predicted verdicts.")
+
     summary = {
-        "total_samples": total,
-        "verdict_accuracy": round(_safe_rate(matches, total), 4),
-        "false_pass_rate": round(_safe_rate(false_pass, total), 4),
-        "false_fail_rate": round(_safe_rate(false_fail, total), 4),
-        "pending_review_rate": round(_safe_rate(pending_predictions, total), 4),
-        "manual_correction_rate": round(_safe_rate(total - matches, total), 4),
+        "input_rows": total_input,
+        "total_samples": evaluated_total,
+        "evaluated_samples": evaluated_total,
+        "skipped_samples": len(skipped_rows),
+        "skipped_rows": skipped_rows,
+        "verdict_accuracy": round(_safe_rate(matches, evaluated_total), 4),
+        "false_pass_rate": round(_safe_rate(false_pass, evaluated_total), 4),
+        "false_fail_rate": round(_safe_rate(false_fail, evaluated_total), 4),
+        "pending_review_rate": round(_safe_rate(pending_predictions, evaluated_total), 4),
+        "calibrated_count": calibrated_count,
+        "calibrated_rate": round(_safe_rate(calibrated_count, evaluated_total), 4),
+        "manual_correction_rate": round(_safe_rate(evaluated_total - matches, evaluated_total), 4),
         "average_latency_ms": round(latency_total / latency_samples, 2) if latency_samples else None,
         "average_quality_score": round(quality_total / quality_samples, 2) if quality_samples else None,
+        "average_unet_dirty_coverage_pct": round(unet_coverage_total / unet_coverage_samples, 3)
+        if unet_coverage_samples
+        else None,
+        "average_sam3_dirty_coverage_pct": round(sam3_coverage_total / sam3_coverage_samples, 3)
+        if sam3_coverage_samples
+        else None,
+        "average_combined_dirty_coverage_pct": round(combined_coverage_total / combined_coverage_samples, 3)
+        if combined_coverage_samples
+        else None,
+        "average_sam3_elapsed_ms": round(sam3_elapsed_total / sam3_elapsed_samples, 2)
+        if sam3_elapsed_samples
+        else None,
+        "average_sam3_predictions_count": round(sam3_predictions_total / sam3_predictions_samples, 2)
+        if sam3_predictions_samples
+        else None,
+        "dirty_coverage_source_counts": dict(dirty_coverage_source_counts),
+        "sam3_status_counts": dict(sam3_status_counts),
         "counts": {
             "expected": dict(expected_counts),
             "predicted": dict(predicted_counts),
             "matches": matches,
-            "mismatches": total - matches,
+            "mismatches": evaluated_total - matches,
             "false_pass": false_pass,
             "false_fail": false_fail,
             "pending_predictions": pending_predictions,
@@ -212,14 +307,42 @@ def build_summary(rows: list[dict[str, str]]) -> dict:
 
 def render_markdown(summary: dict) -> str:
     metric_rows = [
-        ["Total samples", str(summary["total_samples"])],
+        ["Input rows", str(summary.get("input_rows", summary["total_samples"]))],
+        ["Evaluated samples", str(summary["evaluated_samples"])],
+        ["Skipped samples", str(summary.get("skipped_samples", 0))],
         ["Verdict accuracy", f'{summary["verdict_accuracy"]:.2%}'],
         ["False pass rate", f'{summary["false_pass_rate"]:.2%}'],
         ["False fail rate", f'{summary["false_fail_rate"]:.2%}'],
         ["Pending review rate", f'{summary["pending_review_rate"]:.2%}'],
+        ["Calibrated count", str(summary.get("calibrated_count", 0))],
+        ["Calibrated rate", f'{summary.get("calibrated_rate", 0.0):.2%}'],
         ["Manual correction rate", f'{summary["manual_correction_rate"]:.2%}'],
         ["Average latency", f'{summary["average_latency_ms"]} ms' if summary["average_latency_ms"] is not None else "N/A"],
         ["Average quality score", str(summary["average_quality_score"]) if summary["average_quality_score"] is not None else "N/A"],
+        [
+            "Average U-Net dirty coverage",
+            f'{summary["average_unet_dirty_coverage_pct"]}%'
+            if summary.get("average_unet_dirty_coverage_pct") is not None
+            else "N/A",
+        ],
+        [
+            "Average SAM3 dirty coverage",
+            f'{summary["average_sam3_dirty_coverage_pct"]}%'
+            if summary.get("average_sam3_dirty_coverage_pct") is not None
+            else "N/A",
+        ],
+        [
+            "Average combined dirty coverage",
+            f'{summary["average_combined_dirty_coverage_pct"]}%'
+            if summary.get("average_combined_dirty_coverage_pct") is not None
+            else "N/A",
+        ],
+        [
+            "Average SAM3 elapsed",
+            f'{summary["average_sam3_elapsed_ms"]} ms'
+            if summary.get("average_sam3_elapsed_ms") is not None
+            else "N/A",
+        ],
     ]
 
     confusion_rows: list[list[str]] = []
@@ -291,7 +414,31 @@ def render_markdown(summary: dict) -> str:
         "- `false_pass`: predicted PASS while expected verdict is not PASS.",
         "- `false_fail`: predicted FAIL while expected verdict is PASS.",
         "- `pending_review_rate`: share of samples predicted as PENDING.",
+        "- `calibrated_rate`: share of evaluated samples changed or reviewed by safety calibration.",
+        f"- Dirty coverage sources: `{summary.get('dirty_coverage_source_counts', {})}`.",
+        f"- SAM3 statuses: `{summary.get('sam3_status_counts', {})}`.",
     ]
+
+    skipped_rows = summary.get("skipped_rows") or []
+    if skipped_rows:
+        skipped_table_rows = [
+            [
+                str(item.get("image_id", "")),
+                str(item.get("expected_verdict", "")),
+                str(item.get("predicted_verdict", "")),
+                str(item.get("reason", "")),
+            ]
+            for item in skipped_rows
+        ]
+        sections.extend(
+            [
+                "",
+                "## Skipped Rows",
+                "",
+                _markdown_table(["Image ID", "Expected", "Predicted", "Reason"], skipped_table_rows),
+            ]
+        )
+
     return "\n".join(sections) + "\n"
 
 

@@ -1,0 +1,14 @@
+{
+  "checked_at": "2026-05-27",
+  "variant": "candidate_unet_sam3_enabled",
+  "status": "blocked",
+  "evaluated_samples": 0,
+  "skipped_samples": 0,
+  "sam3_resolution": 512,
+  "inference_batch_concurrency": 1,
+  "host_gpu": "NVIDIA GeForce RTX 3050 4GB",
+  "host_cuda_reported_by_driver": "12.3",
+  "sam3_container_cuda_requirement": ">=12.8",
+  "blocking_error": "nvidia-container-cli: requirement error: unsatisfied condition: cuda>=12.8, please update your driver to a newer version, or use an earlier cuda container",
+  "conclusion": "SAM3 integration could not be quantified on this local runtime. The SAM3 image must be rebuilt against a CUDA/Torch stack compatible with the host driver, or the host NVIDIA driver must be upgraded before running SAM3 benchmarks."
+}

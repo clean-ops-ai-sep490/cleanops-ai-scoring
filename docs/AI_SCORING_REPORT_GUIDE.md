@@ -97,16 +97,25 @@ Lay toi thieu cac truong sau cho moi anh:
 
 ### Buoc 4: Tong hop metric
 
-Dung script:
+Chay API that de tao CSV evaluated:
+
+```powershell
+python scripts/run_cleanliness_pilot_benchmark.py `
+  --input-csv benchmarks/cleanliness/pilot_benchmark.csv `
+  --output-csv benchmarks/reports/cleanliness_pilot_evaluated.csv `
+  --api-base-url http://127.0.0.1:8000
+```
+
+Sau do dung script:
 
 ```powershell
 python scripts/summarize_pilot_benchmark.py `
-  --input-csv docs/templates/pilot_benchmark_dataset_template.csv `
-  --output-json outputs/reports/pilot_benchmark_summary.json `
-  --output-md outputs/reports/pilot_benchmark_summary.md
+  --input-csv benchmarks/reports/cleanliness_pilot_evaluated.csv `
+  --output-json benchmarks/reports/cleanliness_pilot_summary.json `
+  --output-md benchmarks/reports/cleanliness_pilot_summary.md
 ```
 
-Khi co du lieu that, thay file CSV template bang file da dien.
+Chi chay summary sau khi model that da dien `predicted_verdict`, `quality_score`, va `latency_ms`. Khong dien tay cac cot du doan.
 
 ## 5. Metric nen dua vao bao cao
 
@@ -164,11 +173,7 @@ Capability that trong codebase hien tai:
 
 ## 6. Cau truc muc bao cao nen viet
 
-Ban co the copy truc tiep tu file:
-
-- `docs/templates/ai_scoring_report_section_template.md`
-
-Cau truc nay da gom:
+Nen viet muc bao cao dua tren cac tai lieu that trong `docs/ai/`, gom:
 
 - muc tieu danh gia
 - kien truc va metric
@@ -245,9 +250,13 @@ Neu hoi "Tai sao khong dung 1 model duy nhat?", ban co the tra loi:
 
 ## 9. Artifact di kem da duoc tao
 
-- `docs/templates/ai_scoring_report_section_template.md`: doan bao cao co the copy vao luan van
-- `docs/templates/pilot_benchmark_dataset_template.csv`: file dien du lieu pilot benchmark
-- `docs/templates/pilot_benchmark_case_studies_template.csv`: file danh sach case study minh hoa
-- `docs/templates/ppe_pilot_benchmark_template.csv`: file dien du lieu pilot benchmark cho PPE
+- `docs/ai/AI_SCORING_OVERVIEW.md`: tong quan kien truc AI scoring
+- `docs/ai/BENCHMARK_PROTOCOL.md`: protocol benchmark that
+- `docs/ai/BENCHMARK_STORAGE.md`: noi luu benchmark va report
+- `benchmarks/cleanliness/pilot_benchmark.csv`: ground truth cleanliness pilot set that
+- `benchmarks/cleanliness/case_studies.csv`: case study that tu pilot set
+- `benchmarks/ppe/pilot_benchmark.csv`: ground truth PPE pilot set that
+- `scripts/run_cleanliness_pilot_benchmark.py`: chay scoring API that tren pilot set
+- `scripts/run_ppe_pilot_benchmark.py`: chay PPE API that tren pilot set
 - `scripts/summarize_pilot_benchmark.py`: script tong hop metric business tu file CSV
 - `scripts/summarize_ppe_benchmark.py`: script tong hop metric business cho PPE tu file CSV

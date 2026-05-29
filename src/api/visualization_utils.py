@@ -186,6 +186,7 @@ def render_hybrid_overlay(
     visualize_jpeg_quality: int,
     visual_review: Dict[str, Any] | None = None,
     dirty_region_candidates: list[Dict[str, Any]] | None = None,
+    sam3_result: Dict[str, Any] | None = None,
 ) -> bytes:
     overlay = rgb.copy()
     height, width = overlay.shape[:2]
@@ -226,8 +227,6 @@ def render_hybrid_overlay(
 
     cv2.drawContours(composed, stain_contours, -1, (30, 30, 220), contour_thickness)
     cv2.drawContours(composed, wet_contours, -1, (220, 200, 30), contour_thickness)
-
-    dirty_region_candidates = dirty_region_candidates or []
     visual_review = visual_review or {}
     penalty_detection_indexes = {
         idx
@@ -235,21 +234,11 @@ def render_hybrid_overlay(
         if isinstance(idx, int)
     }
     # Production visualization should only draw object boxes that affect scoring.
+    # Dirty/wet segmentation is shown as one merged overlay, not extra Roboflow/SAM3 boxes.
     # Object advisory boxes are ignored here unless they become YOLO results and penalty indexes.
     advisory_object_boxes: list[Dict[str, Any]] = []
-    advisory_dirty_boxes = [
-        item for item in visual_review.get("advisory_dirty_boxes", []) if isinstance(item, dict)
-    ]
-    dirty_label_map = {
-        int(item.get("region_id")): str(item.get("label", "")).strip()
-        for item in visual_review.get("dirty_region_labels", [])
-        if isinstance(item, dict) and isinstance(item.get("region_id"), int)
-    }
-    highlight_region_ids = {
-        idx
-        for idx in visual_review.get("highlight_dirty_region_ids", [])
-        if isinstance(idx, int)
-    }
+    advisory_dirty_boxes: list[Dict[str, Any]] = []
+    highlight_region_ids: set[int] = set()
 
     for idx, item in enumerate(yolo_result.get("results", [])):
         if idx not in penalty_detection_indexes:
@@ -269,24 +258,6 @@ def render_hybrid_overlay(
             padding=label_padding,
         )
 
-    for candidate in dirty_region_candidates:
-        region_id = int(candidate.get("region_id", 0))
-        if region_id not in highlight_region_ids:
-            continue
-
-        x1, y1, x2, y2 = [int(v) for v in candidate.get("bbox_px", [0, 0, 0, 0])]
-        label = dirty_label_map.get(region_id) or str(candidate.get("kind_hint", "dirty_zone")).replace("_", " ")
-        _draw_labeled_box(
-            composed,
-            [x1, y1, x2, y2],
-            _truncate_text(label, 28),
-            (30, 30, 220),
-            font_scale=label_font_scale,
-            thickness=box_thickness,
-            text_color=(255, 255, 255),
-            padding=label_padding,
-        )
-
     for item in advisory_object_boxes:
         x1, y1, x2, y2 = [int(v) for v in item.get("bbox_px", [0, 0, 0, 0])]
         label = _truncate_text(
@@ -301,23 +272,6 @@ def render_hybrid_overlay(
             font_scale=label_font_scale,
             thickness=box_thickness,
             text_color=(0, 0, 0),
-            padding=label_padding,
-        )
-
-    for item in advisory_dirty_boxes:
-        x1, y1, x2, y2 = [int(v) for v in item.get("bbox_px", [0, 0, 0, 0])]
-        label = _truncate_text(
-            f"{str(item.get('label', 'dirty_zone')).replace('_', ' ')} {float(item.get('confidence', 0.0)):.2f}",
-            28,
-        )
-        _draw_labeled_box(
-            composed,
-            [x1, y1, x2, y2],
-            label,
-            (30, 30, 220),
-            font_scale=label_font_scale,
-            thickness=box_thickness,
-            text_color=(255, 255, 255),
             padding=label_padding,
         )
 
@@ -339,6 +293,11 @@ def render_hybrid_overlay(
     if not compact_mode:
         optional_lines.append(f"OBJECT PENALTY: {float(scoring.get('object_penalty', 0.0)):.2f}")
         optional_lines.append(f"ENV: {env_key}")
+    if bool(scoring.get("calibrated")) and not compact_mode:
+        raw_verdict = str(scoring.get("raw_verdict", "")).upper()
+        if raw_verdict and raw_verdict != verdict:
+            optional_lines.append(f"RAW: {raw_verdict} -> {verdict}")
+        optional_lines.append("CALIBRATED: review required")
     if (highlight_region_ids or advisory_object_boxes or advisory_dirty_boxes) and not compact_mode:
         optional_lines.append("AI REVIEWED OVERLAY")
     overlay_summary = str(visual_review.get("overlay_summary", "")).strip()
@@ -461,7 +420,6 @@ def build_visualize_json_payload(
     unet_result: Dict[str, Any],
     scoring: Dict[str, Any],
     rendered: bytes,
-    llm_filter: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     image_base64 = base64.b64encode(rendered).decode("ascii")
     payload = {
@@ -475,8 +433,6 @@ def build_visualize_json_payload(
         "yolo": yolo_result,
         "unet": unet_result["summary"],
     }
-    if llm_filter:
-        payload.update(llm_filter)
     return payload
 
 
@@ -529,7 +485,6 @@ def build_visualize_blob_url_payload(
     visualization_url: str,
     mime_type: str,
     byte_size: int,
-    llm_filter: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     payload = {
         "source_type": source_type,
@@ -544,6 +499,4 @@ def build_visualize_blob_url_payload(
         "yolo": yolo_result,
         "unet": unet_result["summary"],
     }
-    if llm_filter:
-        payload.update(llm_filter)
     return payload

@@ -1,0 +1,112 @@
+{
+  "input_rows": 19,
+  "total_samples": 18,
+  "evaluated_samples": 18,
+  "skipped_samples": 1,
+  "skipped_rows": [
+    {
+      "image_id": "scoring_18",
+      "expected_verdict": "PENDING",
+      "predicted_verdict": "",
+      "reason": "missing_or_invalid_verdict",
+      "notes": "floor is in active cleaning stage and may remain wet | inference_error=HTTP 400: {\"error\":\"Kh\u00f4ng th\u1ec3 t\u1ea3i \u1ea3nh t\u1eeb URL: 403 Client Error: Forbidden for url: https://vn.toto.com/wp-content/webp-express/webp-images/uploads/2024/10/cach-ve-sinh-san-nha-sau-xay-dung-5.jpg.webp\"}"
+    }
+  ],
+  "verdict_accuracy": 0.4444,
+  "false_pass_rate": 0.3889,
+  "false_fail_rate": 0.0,
+  "pending_review_rate": 0.2222,
+  "manual_correction_rate": 0.5556,
+  "average_latency_ms": 543.76,
+  "average_quality_score": 93.8,
+  "average_unet_dirty_coverage_pct": 6.202,
+  "average_sam3_dirty_coverage_pct": 0.0,
+  "average_combined_dirty_coverage_pct": 6.202,
+  "average_sam3_elapsed_ms": 0.0,
+  "average_sam3_predictions_count": 0.0,
+  "dirty_coverage_source_counts": {
+    "unet": 17,
+    "equal": 1
+  },
+  "sam3_status_counts": {
+    "disabled": 18
+  },
+  "counts": {
+    "expected": {
+      "PASS": 10,
+      "PENDING": 4,
+      "FAIL": 4
+    },
+    "predicted": {
+      "PASS": 14,
+      "PENDING": 4
+    },
+    "matches": 8,
+    "mismatches": 10,
+    "false_pass": 7,
+    "false_fail": 0,
+    "pending_predictions": 4
+  },
+  "confusion_matrix": {
+    "PASS": {
+      "PASS": 7,
+      "PENDING": 3,
+      "FAIL": 0
+    },
+    "PENDING": {
+      "PASS": 3,
+      "PENDING": 1,
+      "FAIL": 0
+    },
+    "FAIL": {
+      "PASS": 4,
+      "PENDING": 0,
+      "FAIL": 0
+    }
+  },
+  "by_environment": {
+    "LOBBY_CORRIDOR": {
+      "samples": 13,
+      "verdict_accuracy": 0.5385,
+      "false_pass_rate": 0.2308,
+      "false_fail_rate": 0.0,
+      "pending_review_rate": 0.3077,
+      "average_latency_ms": 541.41
+    },
+    "OUTDOOR_LANDSCAPE": {
+      "samples": 2,
+      "verdict_accuracy": 0.0,
+      "false_pass_rate": 1.0,
+      "false_fail_rate": 0.0,
+      "pending_review_rate": 0.0,
+      "average_latency_ms": 634.61
+    },
+    "RESTROOM": {
+      "samples": 3,
+      "verdict_accuracy": 0.3333,
+      "false_pass_rate": 0.6667,
+      "false_fail_rate": 0.0,
+      "pending_review_rate": 0.0,
+      "average_latency_ms": 493.38
+    }
+  },
+  "by_dirty_level": {
+    "clean": {
+      "samples": 10,
+      "verdict_accuracy": 0.7
+    },
+    "obviously_dirty": {
+      "samples": 4,
+      "verdict_accuracy": 0.0
+    },
+    "slightly_dirty": {
+      "samples": 4,
+      "verdict_accuracy": 0.25
+    }
+  },
+  "definitions": {
+    "false_pass": "predicted PASS while expected verdict is not PASS",
+    "false_fail": "predicted FAIL while expected verdict is PASS",
+    "pending_review_rate": "share of samples predicted as PENDING"
+  }
+}

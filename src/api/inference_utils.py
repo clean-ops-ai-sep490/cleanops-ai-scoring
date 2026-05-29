@@ -12,6 +12,20 @@ from src.api.scoring_utils import score_image, summarize_penalty_detections
 from src.models.unet_segmenter import UNetSegmenter
 
 
+def _normalize_unet_state_dict(state_dict: Dict[str, Any]) -> Dict[str, Any]:
+    if state_dict and all(not key.startswith("model.") for key in state_dict):
+        return {f"model.{key}": value for key, value in state_dict.items()}
+    return state_dict
+
+
+def _infer_unet_encoder(state_dict: Dict[str, Any], default_encoder: str) -> str:
+    keys = set(state_dict)
+    plain_keys = {key.removeprefix("model.") for key in keys}
+    if "encoder.layer1.0.conv3.weight" not in plain_keys:
+        return "resnet34"
+    return default_encoder
+
+
 def load_unet_model(
     model_path: str,
     unet_device: torch.device,
@@ -26,12 +40,12 @@ def load_unet_model(
     if isinstance(ckpt, dict):
         encoder = ckpt.get("encoder", "resnet50")
         unet_img_size = int(ckpt.get("img_size", default_unet_img_size))
+    state_dict = ckpt.get("model_state") if isinstance(ckpt, dict) and "model_state" in ckpt else ckpt
+    if isinstance(state_dict, dict) and not (isinstance(ckpt, dict) and ckpt.get("encoder")):
+        encoder = _infer_unet_encoder(state_dict, encoder)
 
     unet_model = UNetSegmenter(encoder_name=encoder, classes=3).to(unet_device)
-    if isinstance(ckpt, dict) and "model_state" in ckpt:
-        unet_model.load_state_dict(ckpt["model_state"])
-    else:
-        unet_model.load_state_dict(ckpt)
+    unet_model.load_state_dict(_normalize_unet_state_dict(state_dict))
     unet_model.eval()
     return unet_model, unet_img_size
 

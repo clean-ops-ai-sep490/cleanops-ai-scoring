@@ -5,14 +5,13 @@ services:
       dockerfile: Dockerfile
       args:
         REQUIREMENTS_FILE: ${SCORING_REQUIREMENTS_FILE:-requirements.inference.txt}
-    env_file:
-      - .env
     environment:
       - APP_HOST=0.0.0.0
       - APP_PORT=${APP_PORT:-8000}
       - APP_RELOAD=false
       - BASE_OUTPUT_DIR=${BASE_OUTPUT_DIR:-/app/outputs}
       - YOLO_TRAIN_PROJECT_DIR=${YOLO_TRAIN_PROJECT_DIR:-/app/outputs/yolo_training_4_4}
+      - UNET_MODEL_PATH=${UNET_MODEL_PATH:-models/unet_multiclass_best.pth}
       - MODEL_CACHE_DIR=${MODEL_CACHE_DIR:-/app/model-cache}
       - MODEL_STORAGE_ENABLED=${MODEL_STORAGE_ENABLED:-true}
       - MODEL_STORAGE_CONNECTION_STRING=${MODEL_STORAGE_CONNECTION_STRING:-}
@@ -26,20 +25,26 @@ services:
       - VISUALIZE_JPEG_QUALITY=${VISUALIZE_JPEG_QUALITY:-92}
       - VISUALIZE_TEMP_URL_TTL_SEC=${VISUALIZE_TEMP_URL_TTL_SEC:-900}
       - VISUALIZE_TEMP_MAX_ITEMS=${VISUALIZE_TEMP_MAX_ITEMS:-200}
-      - LLM_FILTER_ENABLED=${LLM_FILTER_ENABLED:-false}
-      - LLM_FILTER_MODEL=${LLM_FILTER_MODEL:-gemini-2.5-flash}
-      - LLM_FILTER_TIMEOUT_SEC=${LLM_FILTER_TIMEOUT_SEC:-12}
-      - LLM_FILTER_BATCH_CONCURRENCY=${LLM_FILTER_BATCH_CONCURRENCY:-2}
-      - LLM_FILTER_QUEUE_ENABLED=${LLM_FILTER_QUEUE_ENABLED:-true}
-      - LLM_FILTER_QUEUE_MODE=${LLM_FILTER_QUEUE_MODE:-global_fifo}
-      - LLM_FILTER_DEADLINE_SEC=${LLM_FILTER_DEADLINE_SEC:-60}
-      - LLM_FILTER_RETRY_INITIAL_DELAY_MS=${LLM_FILTER_RETRY_INITIAL_DELAY_MS:-1000}
-      - LLM_FILTER_RETRY_MAX_DELAY_MS=${LLM_FILTER_RETRY_MAX_DELAY_MS:-8000}
-      - LLM_FILTER_RETRYABLE_STATUS_CODES=${LLM_FILTER_RETRYABLE_STATUS_CODES:-429,500,502,503,504}
-      - LLM_FILTER_MAX_IMAGE_DIMENSION=${LLM_FILTER_MAX_IMAGE_DIMENSION:-1280}
-      - LLM_FILTER_JPEG_QUALITY=${LLM_FILTER_JPEG_QUALITY:-85}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GEMINI_BASE_URL=${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
+      - INFERENCE_BATCH_CONCURRENCY=${INFERENCE_BATCH_CONCURRENCY:-2}
+      - SAM3_ENABLED=${SAM3_ENABLED:-true}
+      - SAM3_REQUIRED=${SAM3_REQUIRED:-false}
+      - SAM3_PROVIDER=${SAM3_PROVIDER:-roboflow}
+      - ROBOFLOW_API_URL=${ROBOFLOW_API_URL:-https://serverless.roboflow.com}
+      - ROBOFLOW_API_KEY=${ROBOFLOW_API_KEY:-}
+      - ROBOFLOW_WORKSPACE=${ROBOFLOW_WORKSPACE:-nams-workspace-fykkb}
+      - ROBOFLOW_WORKFLOW_ID=${ROBOFLOW_WORKFLOW_ID:-general-segmentation-api-14}
+      - ROBOFLOW_CLASSES=${ROBOFLOW_CLASSES:-Garbage, Stain, Stained_Floor, Wet_Floor}
+      - ROBOFLOW_DIRTY_LABELS=${ROBOFLOW_DIRTY_LABELS:-Garbage, Stain, Stained_Floor, dirty_area, marks, trash, debris}
+      - ROBOFLOW_WET_LABELS=${ROBOFLOW_WET_LABELS:-Wet_Floor, wet_surface, water, spill, puddle}
+      - ROBOFLOW_USE_CACHE=${ROBOFLOW_USE_CACHE:-true}
+      - SAM3_CHECKPOINT_PATH=${SAM3_CHECKPOINT_PATH:-/app/model-cache/sam3/sam3.pt}
+      - SAM3_RESOLUTION=${SAM3_RESOLUTION:-1008}
+      - SAM3_CONFIDENCE_THRESHOLD=${SAM3_CONFIDENCE_THRESHOLD:-0.3}
+      - SAM3_PROMPTS=${SAM3_PROMPTS:-dirty area}
+      - SAM3_MAX_PROMPTS=${SAM3_MAX_PROMPTS:-7}
+      - SAM3_MIN_MASK_AREA_PX=${SAM3_MIN_MASK_AREA_PX:-64}
+      - SAM3_DEVICE=${SAM3_DEVICE:-cpu}
+      - SAM3_USE_BFLOAT16=${SAM3_USE_BFLOAT16:-true}
       - APP_PUBLIC_BASE_URL=${APP_PUBLIC_BASE_URL:-http://localhost:8000}
       - RETRAIN_API_ENABLED=${RETRAIN_API_ENABLED:-true}
       - RETRAIN_API_KEY=${RETRAIN_API_KEY:-}
@@ -59,6 +64,12 @@ services:
       - RETRAIN_CANDIDATE_UNET_FILE=${RETRAIN_CANDIDATE_UNET_FILE:-outputs/retrain/candidate/unet_best.pth}
       - RETRAIN_CANDIDATE_METRICS_FILE=${RETRAIN_CANDIDATE_METRICS_FILE:-outputs/retrain/candidate_metrics.json}
       - RETRAIN_ALLOW_EXISTING_BLOB_CANDIDATE=${RETRAIN_ALLOW_EXISTING_BLOB_CANDIDATE:-true}
+      - PPE_GEMINI_ENABLED=${PPE_GEMINI_ENABLED:-false}
+      - PPE_GEMINI_MODE=${PPE_GEMINI_MODE:-missing_only}
+      - PPE_GEMINI_MODEL=${PPE_GEMINI_MODEL:-gemini-2.5-flash-lite}
+      - PPE_GEMINI_TIMEOUT_SEC=${PPE_GEMINI_TIMEOUT_SEC:-8}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_BASE_URL=${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
     ports:
       - "8000:8000"
     volumes:
@@ -81,13 +92,90 @@ services:
       retries: 5
       start_period: 20s
 
+  cleanops-ai-scoring-api-sam3:
+    profiles: ["sam3"]
+    build:
+      context: .
+      dockerfile: Dockerfile.sam3
+    environment:
+      - APP_HOST=0.0.0.0
+      - APP_PORT=${APP_PORT:-8000}
+      - APP_RELOAD=false
+      - BASE_OUTPUT_DIR=${BASE_OUTPUT_DIR:-/app/outputs}
+      - YOLO_TRAIN_PROJECT_DIR=${YOLO_TRAIN_PROJECT_DIR:-/app/outputs/yolo_training_4_4}
+      - UNET_MODEL_PATH=${UNET_MODEL_PATH:-models/unet_multiclass_best.pth}
+      - MODEL_CACHE_DIR=${MODEL_CACHE_DIR:-/app/model-cache}
+      - MODEL_STORAGE_ENABLED=${MODEL_STORAGE_ENABLED:-true}
+      - MODEL_STORAGE_CONNECTION_STRING=${MODEL_STORAGE_CONNECTION_STRING:-}
+      - MODEL_STORAGE_CONTAINER=${MODEL_STORAGE_CONTAINER:-models}
+      - MODEL_STORAGE_ACTIVE_YOLO_KEY=${MODEL_STORAGE_ACTIVE_YOLO_KEY:-scoring/active/yolo/model.pt}
+      - MODEL_STORAGE_ACTIVE_UNET_KEY=${MODEL_STORAGE_ACTIVE_UNET_KEY:-scoring/active/unet/model.pth}
+      - MODEL_STORAGE_ACTIVE_PPE_KEY=${MODEL_STORAGE_ACTIVE_PPE_KEY:-ppe/active/model.pt}
+      - MODEL_FORCE_REFRESH=${MODEL_FORCE_REFRESH:-false}
+      - MODEL_REQUIRE_BLOB=${MODEL_REQUIRE_BLOB:-true}
+      - SCORING_PENALTY_LABELS=${SCORING_PENALTY_LABELS:-metal,paper,plastic,trash,marks,garbage,rubbish,litter,waste,debris,bottle,plastic_bottle,can,cup,cardboard,bag,trash_bag}
+      - SCORING_OBJECT_PENALTY_PER_DETECTION=${SCORING_OBJECT_PENALTY_PER_DETECTION:-10}
+      - SCORING_CALIBRATION_ENABLED=${SCORING_CALIBRATION_ENABLED:-true}
+      - SCORING_HIGH_RISK_REVIEW_ENVS=${SCORING_HIGH_RISK_REVIEW_ENVS:-RESTROOM,HOSPITAL_OR}
+      - SCORING_IGNORED_OBJECT_REVIEW_COUNT=${SCORING_IGNORED_OBJECT_REVIEW_COUNT:-2}
+      - SCORING_IGNORED_OBJECT_REVIEW_LABELS=${SCORING_IGNORED_OBJECT_REVIEW_LABELS:-person,skis,snowboard}
+      - SCORING_UNET_ONLY_REVIEW_MIN_PCT=${SCORING_UNET_ONLY_REVIEW_MIN_PCT:-20}
+      - SCORING_UNET_ONLY_REVIEW_MAX_PCT=${SCORING_UNET_ONLY_REVIEW_MAX_PCT:-60}
+      - SCORING_SINGLE_SAM3_REVIEW_MAX_PREDICTIONS=${SCORING_SINGLE_SAM3_REVIEW_MAX_PREDICTIONS:-1}
+      - SCORING_STRONG_DIRTY_COVERAGE_PCT=${SCORING_STRONG_DIRTY_COVERAGE_PCT:-45}
+      - VISUALIZE_JPEG_QUALITY=${VISUALIZE_JPEG_QUALITY:-92}
+      - VISUALIZATION_BLOB_ENABLED=${VISUALIZATION_BLOB_ENABLED:-true}
+      - VISUALIZATION_BLOB_CONNECTION_STRING=${VISUALIZATION_BLOB_CONNECTION_STRING:-}
+      - VISUALIZATION_BLOB_CONTAINER=${VISUALIZATION_BLOB_CONTAINER:-visualizations}
+      - VISUALIZATION_BLOB_PREFIX=${VISUALIZATION_BLOB_PREFIX:-scoring/visualizations}
+      - INFERENCE_BATCH_CONCURRENCY=${INFERENCE_BATCH_CONCURRENCY:-1}
+      - SAM3_ENABLED=true
+      - SAM3_REQUIRED=true
+      - SAM3_PROVIDER=local
+      - SAM3_CHECKPOINT_PATH=${SAM3_CHECKPOINT_PATH:-/app/model-cache/sam3/sam3.pt}
+      - SAM3_RESOLUTION=${SAM3_RESOLUTION:-1008}
+      - SAM3_CONFIDENCE_THRESHOLD=${SAM3_CONFIDENCE_THRESHOLD:-0.3}
+      - SAM3_PROMPTS=${SAM3_PROMPTS:-dirty area}
+      - SAM3_MAX_PROMPTS=${SAM3_MAX_PROMPTS:-7}
+      - SAM3_MIN_MASK_AREA_PX=${SAM3_MIN_MASK_AREA_PX:-64}
+      - SAM3_DEVICE=cuda
+      - SAM3_USE_BFLOAT16=true
+      - PPE_ENABLED=${PPE_ENABLED:-true}
+      - PPE_MODEL_PATH=${PPE_MODEL_PATH:-/app/model-cache/active/ppe/model.pt}
+      - PPE_DEFAULT_MIN_CONFIDENCE=${PPE_DEFAULT_MIN_CONFIDENCE:-0.25}
+      - PPE_GEMINI_ENABLED=${PPE_GEMINI_ENABLED:-false}
+      - PPE_GEMINI_MODE=${PPE_GEMINI_MODE:-missing_only}
+      - PPE_GEMINI_MODEL=${PPE_GEMINI_MODEL:-gemini-2.5-flash-lite}
+      - PPE_GEMINI_TIMEOUT_SEC=${PPE_GEMINI_TIMEOUT_SEC:-8}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_BASE_URL=${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
+      - APP_PUBLIC_BASE_URL=${APP_PUBLIC_BASE_URL:-http://localhost:8000}
+    ports:
+      - "8000:8000"
+    volumes:
+      - cleanopsai-scoring-outputs:/app/outputs
+      - cleanopsai-model-cache:/app/model-cache
+      - ./models:/app/models:ro
+    gpus: all
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready').getcode() == 200 else 1)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
   cleanops-ai-scoring-trainer:
     profiles: ["trainer"]
     build:
       context: .
       dockerfile: Dockerfile.train
-    env_file:
-      - .env
     environment:
       - BASE_OUTPUT_DIR=${BASE_OUTPUT_DIR:-/app/outputs}
       - YOLO_TRAIN_PROJECT_DIR=${YOLO_TRAIN_PROJECT_DIR:-/app/outputs/yolo_training_4_4}

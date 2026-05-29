@@ -1,0 +1,101 @@
+{
+  "input_rows": 19,
+  "total_samples": 18,
+  "evaluated_samples": 18,
+  "skipped_samples": 1,
+  "skipped_rows": [
+    {
+      "image_id": "scoring_18",
+      "expected_verdict": "PENDING",
+      "predicted_verdict": "",
+      "reason": "missing_or_invalid_verdict",
+      "notes": "floor is in active cleaning stage and may remain wet | inference_error=HTTP 400: {\"error\":\"Kh\u00f4ng th\u1ec3 t\u1ea3i \u1ea3nh t\u1eeb URL: 403 Client Error: Forbidden for url: https://vn.toto.com/wp-content/webp-express/webp-images/uploads/2024/10/cach-ve-sinh-san-nha-sau-xay-dung-5.jpg.webp\"}"
+    }
+  ],
+  "verdict_accuracy": 0.4444,
+  "false_pass_rate": 0.1111,
+  "false_fail_rate": 0.1111,
+  "pending_review_rate": 0.5556,
+  "manual_correction_rate": 0.5556,
+  "average_latency_ms": 560.32,
+  "average_quality_score": 77.28,
+  "counts": {
+    "expected": {
+      "PASS": 10,
+      "PENDING": 4,
+      "FAIL": 4
+    },
+    "predicted": {
+      "PASS": 6,
+      "FAIL": 2,
+      "PENDING": 10
+    },
+    "matches": 8,
+    "mismatches": 10,
+    "false_pass": 2,
+    "false_fail": 2,
+    "pending_predictions": 10
+  },
+  "confusion_matrix": {
+    "PASS": {
+      "PASS": 4,
+      "PENDING": 4,
+      "FAIL": 2
+    },
+    "PENDING": {
+      "PASS": 0,
+      "PENDING": 4,
+      "FAIL": 0
+    },
+    "FAIL": {
+      "PASS": 2,
+      "PENDING": 2,
+      "FAIL": 0
+    }
+  },
+  "by_environment": {
+    "LOBBY_CORRIDOR": {
+      "samples": 13,
+      "verdict_accuracy": 0.5385,
+      "false_pass_rate": 0.0769,
+      "false_fail_rate": 0.1538,
+      "pending_review_rate": 0.4615,
+      "average_latency_ms": 538.0
+    },
+    "OUTDOOR_LANDSCAPE": {
+      "samples": 2,
+      "verdict_accuracy": 0.5,
+      "false_pass_rate": 0.0,
+      "false_fail_rate": 0.0,
+      "pending_review_rate": 1.0,
+      "average_latency_ms": 664.5
+    },
+    "RESTROOM": {
+      "samples": 3,
+      "verdict_accuracy": 0.0,
+      "false_pass_rate": 0.3333,
+      "false_fail_rate": 0.0,
+      "pending_review_rate": 0.6667,
+      "average_latency_ms": 587.54
+    }
+  },
+  "by_dirty_level": {
+    "clean": {
+      "samples": 10,
+      "verdict_accuracy": 0.4
+    },
+    "obviously_dirty": {
+      "samples": 4,
+      "verdict_accuracy": 0.0
+    },
+    "slightly_dirty": {
+      "samples": 4,
+      "verdict_accuracy": 1.0
+    }
+  },
+  "definitions": {
+    "false_pass": "predicted PASS while expected verdict is not PASS",
+    "false_fail": "predicted FAIL while expected verdict is PASS",
+    "pending_review_rate": "share of samples predicted as PENDING"
+  }
+}

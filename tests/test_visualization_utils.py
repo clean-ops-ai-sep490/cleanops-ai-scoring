@@ -15,7 +15,15 @@ from src.api.visualization_utils import render_hybrid_overlay
 
 
 class VisualizationUtilsTests(unittest.TestCase):
-    def _render_with_capture(self, *, yolo_result: dict[str, object], scoring: dict[str, object]):
+    def _render_with_capture(
+        self,
+        *,
+        yolo_result: dict[str, object],
+        scoring: dict[str, object],
+        sam3_result: dict[str, object] | None = None,
+        visual_review: dict[str, object] | None = None,
+        dirty_region_candidates: list[dict[str, object]] | None = None,
+    ):
         drawn_boxes: list[tuple[list[int], str]] = []
         panel_texts: list[str] = []
 
@@ -38,8 +46,9 @@ class VisualizationUtilsTests(unittest.TestCase):
                     scoring=scoring,
                     env_key="LOBBY_CORRIDOR",
                     visualize_jpeg_quality=92,
-                    visual_review={"keep_detection_indexes": [0, 1]},
-                    dirty_region_candidates=[],
+                    visual_review=visual_review or {"keep_detection_indexes": [0, 1]},
+                    dirty_region_candidates=dirty_region_candidates or [],
+                    sam3_result=sam3_result,
                 )
 
         self.assertGreater(len(rendered), 0)
@@ -88,6 +97,75 @@ class VisualizationUtilsTests(unittest.TestCase):
 
         self.assertEqual(drawn_boxes, [])
         self.assertTrue(any(text == "PENALTY OBJECTS: 0" for text in panel_texts))
+
+    def test_renderer_does_not_draw_sam3_prompt_boxes(self):
+        sam3_mask = np.zeros((1000, 1000), dtype=np.uint8)
+        sam3_mask[100:180, 120:220] = 1
+        drawn_boxes, _ = self._render_with_capture(
+            yolo_result={"detections_count": 0, "results": []},
+            scoring={
+                "verdict": "PENDING",
+                "quality_score": 82.0,
+                "base_clean_score": 82.0,
+                "object_penalty": 0.0,
+                "penalty_detections_count": 0,
+                "penalty_detection_indexes": [],
+            },
+            sam3_result={
+                "_mask_union": sam3_mask,
+                "predictions": [
+                    {
+                        "prompt": "dirty area",
+                        "confidence": 0.81,
+                        "bbox_xyxy": [120, 100, 220, 180],
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(drawn_boxes, [])
+
+    def test_renderer_does_not_draw_dirty_region_boxes(self):
+        drawn_boxes, _ = self._render_with_capture(
+            yolo_result={"detections_count": 0, "results": []},
+            scoring={
+                "verdict": "PENDING",
+                "quality_score": 60.0,
+                "base_clean_score": 60.0,
+                "object_penalty": 0.0,
+                "penalty_detections_count": 0,
+                "penalty_detection_indexes": [],
+            },
+            visual_review={
+                "highlight_dirty_region_ids": [1],
+                "dirty_region_labels": [{"region_id": 1, "label": "stain"}],
+                "advisory_dirty_boxes": [{"bbox_px": [20, 20, 120, 120], "label": "stain"}],
+            },
+            dirty_region_candidates=[
+                {"region_id": 1, "bbox_px": [20, 20, 120, 120], "kind_hint": "stain"}
+            ],
+        )
+
+        self.assertEqual(drawn_boxes, [])
+
+    def test_renderer_shows_calibration_context(self):
+        _, panel_texts = self._render_with_capture(
+            yolo_result={"detections_count": 0, "results": []},
+            scoring={
+                "verdict": "PENDING",
+                "raw_verdict": "PASS",
+                "quality_score": 84.999,
+                "base_clean_score": 100.0,
+                "object_penalty": 0.0,
+                "penalty_detections_count": 0,
+                "penalty_detection_indexes": [],
+                "calibrated": True,
+                "calibration_rules": ["high_risk_weak_evidence_review"],
+            },
+        )
+
+        self.assertTrue(any(text == "RAW: PASS -> PENDING" for text in panel_texts))
+        self.assertTrue(any(text == "CALIBRATED: review required" for text in panel_texts))
 
 
 if __name__ == "__main__":

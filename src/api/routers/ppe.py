@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from src.api import app_state
-from src.api.ppe_utils import evaluate_ppe_payload
+from src.api.ppe_utils import GeminiPpeConfig, evaluate_ppe_payload
 from src.api.schemas import PpeEvaluateRequest
 
 router = APIRouter(tags=["ppe"])
@@ -43,7 +43,13 @@ async def evaluate_ppe(request: PpeEvaluateRequest):
         model=app_state.PPE_MODEL,
         timeout_sec=app_state.REQUEST_TIMEOUT_SEC,
         min_confidence=request.min_confidence,
-        llm_filter=app_state.LLM_FILTER,
-        batch_concurrency=app_state.settings.llm_filter_batch_concurrency,
-        allowed_labels=app_state.PPE_CLASS_LABELS,
+        batch_concurrency=app_state.settings.inference_batch_concurrency,
+        gemini_config=GeminiPpeConfig(
+            enabled=app_state.settings.ppe_gemini_enabled,
+            mode=app_state.settings.ppe_gemini_mode,
+            api_key=app_state.settings.gemini_api_key,
+            model=app_state.settings.ppe_gemini_model,
+            base_url=app_state.settings.gemini_base_url,
+            timeout_sec=app_state.settings.ppe_gemini_timeout_sec,
+        ),
     )

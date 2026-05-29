@@ -1,0 +1,195 @@
+{
+  "baseline_label": "current_active_sam3_disabled",
+  "variants": [
+    {
+      "label": "current_active_sam3_disabled",
+      "path": "benchmarks\\reports\\cleanliness_current_active_sam3_disabled_evaluated.csv",
+      "evaluated_samples": 18,
+      "skipped_samples": 1,
+      "verdict_accuracy": 0.4444,
+      "false_pass_rate": 0.1111,
+      "false_fail_rate": 0.1111,
+      "pending_review_rate": 0.5556,
+      "average_latency_ms": 708.58,
+      "average_quality_score": 77.28,
+      "average_unet_dirty_coverage_pct": 22.721,
+      "average_sam3_dirty_coverage_pct": 0.0,
+      "average_combined_dirty_coverage_pct": 22.721,
+      "average_sam3_elapsed_ms": 0.0,
+      "dirty_coverage_source_counts": {
+        "equal": 3,
+        "unet": 15
+      },
+      "sam3_status_counts": {
+        "disabled": 18
+      }
+    },
+    {
+      "label": "candidate_unet_sam3_disabled",
+      "path": "benchmarks\\reports\\cleanliness_candidate_unet_sam3_disabled_evaluated.csv",
+      "evaluated_samples": 18,
+      "skipped_samples": 1,
+      "verdict_accuracy": 0.4444,
+      "false_pass_rate": 0.3889,
+      "false_fail_rate": 0.0,
+      "pending_review_rate": 0.2222,
+      "average_latency_ms": 543.76,
+      "average_quality_score": 93.8,
+      "average_unet_dirty_coverage_pct": 6.202,
+      "average_sam3_dirty_coverage_pct": 0.0,
+      "average_combined_dirty_coverage_pct": 6.202,
+      "average_sam3_elapsed_ms": 0.0,
+      "dirty_coverage_source_counts": {
+        "unet": 17,
+        "equal": 1
+      },
+      "sam3_status_counts": {
+        "disabled": 18
+      }
+    }
+  ],
+  "flip_reports": [
+    {
+      "label": "candidate_unet_sam3_disabled",
+      "common_samples": 18,
+      "verdict_flip_count": 11,
+      "improved_count": 4,
+      "regressed_count": 4,
+      "same_correctness_count": 10,
+      "flips": [
+        {
+          "image_id": "scoring_02",
+          "expected": "PASS",
+          "baseline_predicted": "FAIL",
+          "candidate_predicted": "PENDING",
+          "baseline_quality_score": 43.907,
+          "candidate_quality_score": 82.743,
+          "candidate_dirty_coverage_source": "unet",
+          "candidate_unet_dirty_coverage_pct": 17.257,
+          "candidate_sam3_dirty_coverage_pct": 0.0,
+          "candidate_combined_dirty_coverage_pct": 17.257
+        },
+        {
+          "image_id": "scoring_03",
+          "expected": "PASS",
+          "baseline_predicted": "PENDING",
+          "candidate_predicted": "PASS",
+          "baseline_quality_score": 76.82,
+          "candidate_quality_score": 98.52,
+          "candidate_dirty_coverage_source": "unet",
+          "candidate_unet_dirty_coverage_pct": 1.48,
+          "candidate_sam3_dirty_coverage_pct": 0.0,
+          "candidate_combined_dirty_coverage_pct": 1.48
+        },
+        {
+          "image_id": "scoring_07",
+          "expected": "PASS",
+          "baseline_predicted": "PENDING",
+          "candidate_predicted": "PASS",
+          "baseline_quality_score": 67.959,
+          "candidate_quality_score": 99.801,
+          "candidate_dirty_coverage_source": "unet",
+          "candidate_unet_dirty_coverage_pct": 0.199,
+          "candidate_sam3_dirty_coverage_pct": 0.0,
+          "candidate_combined_dirty_coverage_pct": 0.199
+        },
+        {
+          "image_id": "scoring_09",
+          "expected": "PENDING",
+          "baseline_predicted": "PENDING",
+          "candidate_predicted": "PASS",
+          "baseline_quality_score": 82.909,
+          "candidate_quality_score": 93.804,
+          "candidate_dirty_coverage_source": "unet",
+          "candidate_unet_dirty_coverage_pct": 6.196,
+          "candidate_sam3_dirty_coverage_pct": 0.0,
+          "candidate_combined_dirty_coverage_pct": 6.196
+        },
+        {
+          "image_id": "scoring_10",
+          "expected": "FAIL",
+          "baseline_predicted": "PENDING",
+          "candidate_predicted": "PASS",
+          "baseline_quality_score": 79.475,
+          "candidate_quality_score": 96.8,
+          "candidate_dirty_coverage_source": "unet",
+          "candidate_unet_dirty_coverage_pct": 3.2,
+          "candidate_sam3_dirty_coverage_pct": 0.0,
+          "candidate_combined_dirty_coverage_pct": 3.2
+        },
+        {
+          "image_id": "scoring_11",
+          "expected": "PENDING",
+          "baseline_predicted": "PENDING",
+          "candidate_predicted": "PASS",
+          "baseline_quality_score": 66.477,
+          "candidate_quality_score": 99.568,
+          "candidate_dirty_coverage_source": "unet",
+          "candidate_unet_dirty_coverage_pct": 0.432,
+          "candidate_sam3_dirty_coverage_pct": 0.0,
+          "candidate_combined_dirty_coverage_pct": 0.432
+        },
+        {
+          "image_id": "scoring_12",
+          "expected": "FAIL",
+          "baseline_predicted": "PENDING",
+          "candidate_predicted": "PASS",
+          "baseline_quality_score": 56.729,
+          "candidate_quality_score": 97.422,
+          "candidate_dirty_coverage_source": "unet",
+          "candidate_unet_dirty_coverage_pct": 2.578,
+          "candidate_sam3_dirty_coverage_pct": 0.0,
+          "candidate_combined_dirty_coverage_pct": 2.578
+        },
+        {
+          "image_id": "scoring_14",
+          "expected": "PASS",
+          "baseline_predicted": "PENDING",
+          "candidate_predicted": "PASS",
+          "baseline_quality_score": 69.358,
+          "candidate_quality_score": 100.0,
+          "candidate_dirty_coverage_source": "equal",
+          "candidate_unet_dirty_coverage_pct": 0.0,
+          "candidate_sam3_dirty_coverage_pct": 0.0,
+          "candidate_combined_dirty_coverage_pct": 0.0
+        },
+        {
+          "image_id": "scoring_15",
+          "expected": "PENDING",
+          "baseline_predicted": "PENDING",
+          "candidate_predicted": "PASS",
+          "baseline_quality_score": 82.968,
+          "candidate_quality_score": 91.605,
+          "candidate_dirty_coverage_source": "unet",
+          "candidate_unet_dirty_coverage_pct": 8.395,
+          "candidate_sam3_dirty_coverage_pct": 0.0,
+          "candidate_combined_dirty_coverage_pct": 8.395
+        },
+        {
+          "image_id": "scoring_16",
+          "expected": "PASS",
+          "baseline_predicted": "PASS",
+          "candidate_predicted": "PENDING",
+          "baseline_quality_score": 99.759,
+          "candidate_quality_score": 85.246,
+          "candidate_dirty_coverage_source": "unet",
+          "candidate_unet_dirty_coverage_pct": 14.754,
+          "candidate_sam3_dirty_coverage_pct": 0.0,
+          "candidate_combined_dirty_coverage_pct": 14.754
+        },
+        {
+          "image_id": "scoring_17",
+          "expected": "PASS",
+          "baseline_predicted": "FAIL",
+          "candidate_predicted": "PASS",
+          "baseline_quality_score": 41.414,
+          "candidate_quality_score": 99.727,
+          "candidate_dirty_coverage_source": "unet",
+          "candidate_unet_dirty_coverage_pct": 0.273,
+          "candidate_sam3_dirty_coverage_pct": 0.0,
+          "candidate_combined_dirty_coverage_pct": 0.273
+        }
+      ]
+    }
+  ]
+}

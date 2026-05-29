@@ -407,7 +407,6 @@ def main() -> None:
         raise RuntimeError("RETRAIN_DATASET_LIMIT must be >= RETRAIN_MIN_APPROVED_ANNOTATIONS for production retrain.")
 
     recreate_dir(dataset_root)
-    recreate_dir(yolo_project_dir / yolo_run_name)
     candidate_yolo_path.parent.mkdir(parents=True, exist_ok=True)
     candidate_unet_path.parent.mkdir(parents=True, exist_ok=True)
     candidate_metrics_path.parent.mkdir(parents=True, exist_ok=True)
@@ -445,31 +444,39 @@ def main() -> None:
         )
 
     ensure_train_valid_splits(dataset_root)
-    yolo_data_yaml = write_yolo_data_yaml(dataset_root)
+    yolo_frozen = env_bool("RETRAIN_FREEZE_YOLO", True)
+    yolo_best_source = active_yolo_path
+    yolo_map: float | None = None
 
-    yolo_device = resolve_device(env_str("RETRAIN_YOLO_DEVICE", "auto"))
-    yolo_half = env_bool("RETRAIN_YOLO_HALF", True) and yolo_device != "cpu"
+    if yolo_frozen:
+        print("[YOLO] RETRAIN_FREEZE_YOLO=true; reusing active YOLO artifact.", flush=True)
+        shutil.copy2(active_yolo_path, candidate_yolo_path)
+    else:
+        recreate_dir(yolo_project_dir / yolo_run_name)
+        yolo_data_yaml = write_yolo_data_yaml(dataset_root)
+        yolo_device = resolve_device(env_str("RETRAIN_YOLO_DEVICE", "auto"))
+        yolo_half = env_bool("RETRAIN_YOLO_HALF", True) and yolo_device != "cpu"
 
-    yolo_env = os.environ.copy()
-    yolo_env.update(
-        {
-            "YOLO_DATA_YAML": str(yolo_data_yaml),
-            "YOLO_WEIGHTS_PATH": str(active_yolo_path),
-            "YOLO_TRAIN_EPOCHS": str(env_int("RETRAIN_YOLO_EPOCHS", 1)),
-            "YOLO_TRAIN_BATCH": str(env_int("RETRAIN_YOLO_BATCH", 1)),
-            "YOLO_TRAIN_IMGSZ": str(env_int("RETRAIN_YOLO_IMGSZ", 320)),
-            "YOLO_PROJECT_DIR": str(yolo_project_dir),
-            "YOLO_RUN_NAME": yolo_run_name,
-            "YOLO_DEVICE": yolo_device,
-            "YOLO_USE_HALF": str(yolo_half).lower(),
-            "YOLO_WORKERS": str(env_int("RETRAIN_YOLO_WORKERS", 0)),
-        }
-    )
-    run_command([sys.executable, "src/train_yolo.py"], env=yolo_env)
+        yolo_env = os.environ.copy()
+        yolo_env.update(
+            {
+                "YOLO_DATA_YAML": str(yolo_data_yaml),
+                "YOLO_WEIGHTS_PATH": str(active_yolo_path),
+                "YOLO_TRAIN_EPOCHS": str(env_int("RETRAIN_YOLO_EPOCHS", 1)),
+                "YOLO_TRAIN_BATCH": str(env_int("RETRAIN_YOLO_BATCH", 1)),
+                "YOLO_TRAIN_IMGSZ": str(env_int("RETRAIN_YOLO_IMGSZ", 320)),
+                "YOLO_PROJECT_DIR": str(yolo_project_dir),
+                "YOLO_RUN_NAME": yolo_run_name,
+                "YOLO_DEVICE": yolo_device,
+                "YOLO_USE_HALF": str(yolo_half).lower(),
+                "YOLO_WORKERS": str(env_int("RETRAIN_YOLO_WORKERS", 0)),
+            }
+        )
+        run_command([sys.executable, "src/train_yolo.py"], env=yolo_env)
 
-    yolo_best = find_latest_best_pt(yolo_project_dir)
-    shutil.copy2(yolo_best, candidate_yolo_path)
-    yolo_map = read_yolo_map(yolo_best.parents[1])
+        yolo_best_source = find_latest_best_pt(yolo_project_dir)
+        shutil.copy2(yolo_best_source, candidate_yolo_path)
+        yolo_map = read_yolo_map(yolo_best_source.parents[1])
 
     unet_proc = run_command(
         [
@@ -512,12 +519,14 @@ def main() -> None:
             "batch_id": os.getenv("TRAINER_BATCH_ID"),
             "sample_count": exported,
             "dataset_root": str(dataset_root),
-            "yolo_best_source": str(yolo_best),
+            "yolo_frozen": yolo_frozen,
+            "yolo_best_source": str(yolo_best_source),
             "unet_checkpoint": str(candidate_unet_path),
         },
         "activeBase": active_base_metadata,
         "dataset": summary,
         "yolo": {
+            "frozen": yolo_frozen,
             "map": yolo_map,
         },
         "unet": {

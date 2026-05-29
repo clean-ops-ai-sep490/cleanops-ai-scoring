@@ -4,32 +4,51 @@ Hệ thống AI kép (Dual-Model) đánh giá chất lượng vệ sinh từ ả
 
 ## Bao cao va Pilot Benchmark
 
-Neu can viet muc AI Scoring trong bao cao do an, repo da co san bo artifact de dung ngay:
+Repo chi giu benchmark va report that. Khong dung file template hoac so lieu dien tay de bao ve phan AI.
 
 - `docs/AI_SCORING_REPORT_GUIDE.md`: huong dan viet bao cao theo huong software engineering + pilot benchmark
-- `docs/templates/ai_scoring_report_section_template.md`: doan bao cao co the copy vao luan van
-- `docs/templates/pilot_benchmark_dataset_template.csv`: template CSV cho tap benchmark nho
-- `docs/templates/pilot_benchmark_case_studies_template.csv`: template case study minh hoa
-- `docs/templates/ppe_pilot_benchmark_template.csv`: template CSV cho PPE benchmark
+- `benchmarks/cleanliness/pilot_benchmark.csv`: tap ground truth that cho cleanliness verdict
+- `benchmarks/cleanliness/case_studies.csv`: case study that tu pilot set
+- `benchmarks/ppe/pilot_benchmark.csv`: tap ground truth that cho PPE
+- `scripts/run_cleanliness_pilot_benchmark.py`: chay API scoring that tren cleanliness pilot set
+- `scripts/run_ppe_pilot_benchmark.py`: chay API PPE that tren PPE pilot set
 - `scripts/summarize_pilot_benchmark.py`: script tong hop `verdict_accuracy`, `false_pass_rate`, `false_fail_rate`, `pending_review_rate`, `average_latency_ms`
 - `scripts/summarize_ppe_benchmark.py`: script tong hop `ppe_status_accuracy`, `missing_item_recall`, `false_missing_rate`, `average_latency_ms`
 
-Vi du tong hop ket qua pilot benchmark:
+Chay cleanliness benchmark bang API dang live:
+
+```powershell
+python scripts/run_cleanliness_pilot_benchmark.py `
+  --input-csv benchmarks/cleanliness/pilot_benchmark.csv `
+  --output-csv benchmarks/reports/cleanliness_pilot_evaluated.csv `
+  --api-base-url http://127.0.0.1:8000
+```
+
+Tong hop ket qua cleanliness benchmark da chay:
 
 ```powershell
 python scripts/summarize_pilot_benchmark.py `
-  --input-csv docs/templates/pilot_benchmark_dataset_template.csv `
-  --output-json outputs/reports/pilot_benchmark_summary.json `
-  --output-md outputs/reports/pilot_benchmark_summary.md
+  --input-csv benchmarks/reports/cleanliness_pilot_evaluated.csv `
+  --output-json benchmarks/reports/cleanliness_pilot_summary.json `
+  --output-md benchmarks/reports/cleanliness_pilot_summary.md
 ```
 
-Vi du tong hop ket qua PPE pilot benchmark:
+Chay PPE benchmark bang API dang live:
+
+```powershell
+python scripts/run_ppe_pilot_benchmark.py `
+  --input-csv benchmarks/ppe/pilot_benchmark.csv `
+  --output-csv benchmarks/reports/ppe_pilot_evaluated.csv `
+  --api-base-url http://127.0.0.1:8000
+```
+
+Tong hop ket qua PPE benchmark da chay:
 
 ```powershell
 python scripts/summarize_ppe_benchmark.py `
-  --input-csv docs/templates/ppe_pilot_benchmark_template.csv `
-  --output-json outputs/reports/ppe_pilot_benchmark_summary.json `
-  --output-md outputs/reports/ppe_pilot_benchmark_summary.md
+  --input-csv benchmarks/reports/ppe_pilot_evaluated.csv `
+  --output-json benchmarks/reports/ppe_pilot_summary.json `
+  --output-md benchmarks/reports/ppe_pilot_summary.md
 ```
 
 ## Danh sách Dataset sử dụng (6 Links từ Đồ án)
@@ -162,30 +181,29 @@ Runtime image hien tai chi nham muc dich inference + retrain bridge:
 - khong bake model checkpoint vao image
 - healthcheck Docker bam vao `GET /health/ready`
 
-### Gemini LLM filter (demo reliability layer)
+### Auxiliary foundation segmentation
 
-Co the bat lop review bang Gemini de refine ket qua tra ve cua cac API inference ma khong doi request/response schema hien tai:
+External API-key verification has been removed from the active runtime path. Cleanliness scoring now uses:
 
-- `LLM_FILTER_ENABLED=true`
-- `LLM_FILTER_MODEL=gemini-2.5-pro`
-- `LLM_FILTER_TIMEOUT_SEC=12`
-- `LLM_FILTER_BATCH_CONCURRENCY=2`
-- `LLM_FILTER_QUEUE_ENABLED=true`
-- `LLM_FILTER_QUEUE_MODE=global_fifo`
-- `LLM_FILTER_DEADLINE_SEC=60`
-- `LLM_FILTER_RETRY_INITIAL_DELAY_MS=1000`
-- `LLM_FILTER_RETRY_MAX_DELAY_MS=8000`
-- `LLM_FILTER_RETRYABLE_STATUS_CODES=429,500,502,503,504`
-- `GEMINI_API_KEY=<your_gemini_key>`
-- `GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta`
+- Roboflow/SAM3-style auxiliary segmentation as an optional broad dirty-region evidence source.
+- U-Net as the trained dirty/wet segmentation model.
+- YOLO as the trained trash-like object detector.
 
-Nguyen tac runtime:
+The public response keeps the `sam3` block for backend compatibility, even when the provider is Roboflow Workflow. For CPU/dev runtime, keep auxiliary segmentation disabled unless testing a provider.
 
-- Moi Gemini call duoc xep vao hang doi FIFO toan cuc, request sau se cho request truoc xu ly xong.
-- Neu Gemini goi thanh cong, service se refine verdict/scoring hoac loc bot detection khong tin cay tuy endpoint.
-- Neu Gemini bi timeout, 429 hoac loi retryable khac, worker se retry co backoff cho toi khi cham `LLM_FILTER_DEADLINE_SEC`, sau do moi fallback ve ket qua CV goc.
-- `LLM_FILTER_TIMEOUT_SEC` la timeout cho tung lan HTTP call; gia tri nay nen nho hon `LLM_FILTER_DEADLINE_SEC` de con slot retry.
-- Health payload (`/`, `/health/live`, `/health/ready`) co them metadata: `llm_filter_enabled`, `llm_filter_configured`, `llm_filter_model`, `llm_filter_last_error`, `llm_filter_last_result`, `llm_filter_queue_mode`, `llm_filter_deadline_sec`, `llm_filter_queue_depth`.
+For the lightweight demo path, configure Roboflow in env only:
+
+```powershell
+SAM3_ENABLED=true
+SAM3_PROVIDER=roboflow
+ROBOFLOW_API_URL=https://serverless.roboflow.com
+ROBOFLOW_API_KEY=<your_roboflow_key>
+ROBOFLOW_WORKSPACE=nams-workspace-fykkb
+ROBOFLOW_WORKFLOW_ID=general-segmentation-api-14
+ROBOFLOW_CLASSES=Garbage, Stain, Stained_Floor
+```
+
+Local SAM3 remains a compatibility path, but the current host smoke test was blocked by CUDA 12.8 image requirements while the driver reports CUDA 12.3. Do not use local SAM3 as a quantitative demo claim until that runtime is fixed and benchmarked.
 
 ### Strict mode (blob-first, fail-fast)
 
@@ -543,33 +561,9 @@ Luu y:
 - Backend .NET hien tai chi tieu thu `evaluate-batch`, `evaluate-url-visualize-link`, va `ppe/evaluate`.
 - Route upload `POST /evaluate-visualize-link` duoc giu lai cho noi bo, khong phai route uu tien cho manual testing.
 
-### Internal/debug only
+### Removed debug routes
 
-Nhung route duoi day van duoc giu tam cho debug/QA noi bo, nhung khong con la public contract uu tien:
-
-- `POST /predict`
-- `POST /predict-url`
-- `POST /predict-unet`
-- `POST /predict-unet-url`
-- `POST /predict-url-visualize`
-- `POST /predict-unet-url-visualize`
-- `POST /evaluate-visualize`
-- `POST /evaluate-url-visualize`
-- `POST /evaluate-visualize-json`
-- `POST /evaluate-url-visualize-json`
-
-### Endpoint JSON + Base64 cho frontend
-
-Vi du URL:
-
-```powershell
-$payload = @{ 
-  url = "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1200&q=80"
-  env = "LOBBY_CORRIDOR"
-} | ConvertTo-Json
-
-Invoke-RestMethod -Uri "http://localhost:8000/evaluate-url-visualize-json" -Method Post -ContentType "application/json" -Body $payload | ConvertTo-Json -Depth 20
-```
+Legacy debug routes such as `/predict`, `/predict-url`, `/predict-unet`, and the old JSON/base64 visualization routes were removed. Use `POST /evaluate-url-visualize-link`, `POST /evaluate-batch`, or `POST /check` for auxiliary prompt segmentation.
 
 Docker note:
 

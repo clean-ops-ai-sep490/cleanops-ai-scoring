@@ -227,6 +227,14 @@ class Settings:
     pending_lower_bound: float
     scoring_penalty_labels: tuple[str, ...]
     scoring_object_penalty_per_detection: float
+    scoring_calibration_enabled: bool
+    scoring_high_risk_review_envs: tuple[str, ...]
+    scoring_ignored_object_review_count: int
+    scoring_ignored_object_review_labels: tuple[str, ...]
+    scoring_unet_only_review_min_pct: float
+    scoring_unet_only_review_max_pct: float
+    scoring_single_sam3_review_max_predictions: int
+    scoring_strong_dirty_coverage_pct: float
     visualize_jpeg_quality: int
     visualize_temp_url_ttl_sec: int
     visualize_temp_max_items: int
@@ -234,31 +242,34 @@ class Settings:
     visualization_blob_connection_string: str
     visualization_blob_container: str
     visualization_blob_prefix: str
-    llm_filter_enabled: bool
-    llm_filter_mode: str
-    llm_filter_model: str
-    llm_filter_timeout_sec: int
-    llm_filter_batch_concurrency: int
-    llm_filter_queue_enabled: bool
-    llm_filter_queue_mode: str
-    llm_filter_deadline_sec: int
-    llm_filter_429_max_retries: int
-    llm_filter_5xx_max_retries: int
-    llm_filter_cooldown_sec: int
-    llm_filter_enable_borderline_only: bool
-    llm_filter_scoring_pass_window: float
-    llm_filter_ppe_verify_on_missing_only: bool
-    llm_filter_retry_initial_delay_ms: int
-    llm_filter_retry_max_delay_ms: int
-    llm_filter_retryable_status_codes: tuple[int, ...]
-    llm_filter_max_image_dimension: int
-    llm_filter_jpeg_quality: int
-    gemini_api_key: str
-    gemini_base_url: str
-
-    kaggle_dataset: str
+    inference_batch_concurrency: int
+    sam3_enabled: bool
+    sam3_required: bool
+    sam3_checkpoint_path: str
+    sam3_resolution: int
+    sam3_confidence_threshold: float
+    sam3_prompts: tuple[str, ...]
+    sam3_max_prompts: int
+    sam3_min_mask_area_px: int
+    sam3_device: str
+    sam3_use_bfloat16: bool
+    sam3_provider: str
+    roboflow_api_url: str
     roboflow_api_key: Optional[str]
     roboflow_workspace: str
+    roboflow_workflow_id: str
+    roboflow_classes: tuple[str, ...]
+    roboflow_dirty_labels: tuple[str, ...]
+    roboflow_wet_labels: tuple[str, ...]
+    roboflow_use_cache: bool
+    gemini_api_key: Optional[str]
+    gemini_base_url: str
+    ppe_gemini_enabled: bool
+    ppe_gemini_mode: str
+    ppe_gemini_model: str
+    ppe_gemini_timeout_sec: int
+
+    kaggle_dataset: str
     roboflow_project: str
     roboflow_version: int
 
@@ -406,6 +417,20 @@ def _build_settings() -> Settings:
             ),
         ),
         scoring_object_penalty_per_detection=_as_float("SCORING_OBJECT_PENALTY_PER_DETECTION", 10.0),
+        scoring_calibration_enabled=_as_bool("SCORING_CALIBRATION_ENABLED", True),
+        scoring_high_risk_review_envs=_as_str_tuple("SCORING_HIGH_RISK_REVIEW_ENVS", ("RESTROOM", "HOSPITAL_OR")),
+        scoring_ignored_object_review_count=max(0, _as_int("SCORING_IGNORED_OBJECT_REVIEW_COUNT", 2)),
+        scoring_ignored_object_review_labels=_as_str_tuple(
+            "SCORING_IGNORED_OBJECT_REVIEW_LABELS",
+            ("person", "skis", "snowboard"),
+        ),
+        scoring_unet_only_review_min_pct=max(0.0, _as_float("SCORING_UNET_ONLY_REVIEW_MIN_PCT", 20.0)),
+        scoring_unet_only_review_max_pct=max(0.0, _as_float("SCORING_UNET_ONLY_REVIEW_MAX_PCT", 60.0)),
+        scoring_single_sam3_review_max_predictions=max(
+            0,
+            _as_int("SCORING_SINGLE_SAM3_REVIEW_MAX_PREDICTIONS", 1),
+        ),
+        scoring_strong_dirty_coverage_pct=max(0.0, _as_float("SCORING_STRONG_DIRTY_COVERAGE_PCT", 45.0)),
         visualize_jpeg_quality=_as_int("VISUALIZE_JPEG_QUALITY", 92),
         visualize_temp_url_ttl_sec=_as_int("VISUALIZE_TEMP_URL_TTL_SEC", 900),
         visualize_temp_max_items=_as_int("VISUALIZE_TEMP_MAX_ITEMS", 200),
@@ -417,35 +442,44 @@ def _build_settings() -> Settings:
         ),
         visualization_blob_container=os.getenv("VISUALIZATION_BLOB_CONTAINER", "visualizations"),
         visualization_blob_prefix=os.getenv("VISUALIZATION_BLOB_PREFIX", "scoring/visualizations"),
-        llm_filter_enabled=_as_bool("LLM_FILTER_ENABLED", False),
-        llm_filter_mode=(os.getenv("LLM_FILTER_MODE", "quota_saver").strip() or "quota_saver"),
-        llm_filter_model=os.getenv("LLM_FILTER_MODEL", "gemini-2.5-flash-lite"),
-        llm_filter_timeout_sec=_as_int("LLM_FILTER_TIMEOUT_SEC", 8),
-        llm_filter_batch_concurrency=max(1, _as_int("LLM_FILTER_BATCH_CONCURRENCY", 2)),
-        llm_filter_queue_enabled=_as_bool("LLM_FILTER_QUEUE_ENABLED", True),
-        llm_filter_queue_mode=os.getenv("LLM_FILTER_QUEUE_MODE", "global_fifo").strip() or "global_fifo",
-        llm_filter_deadline_sec=max(1, _as_int("LLM_FILTER_DEADLINE_SEC", 15)),
-        llm_filter_429_max_retries=max(0, _as_int("LLM_FILTER_429_MAX_RETRIES", 0)),
-        llm_filter_5xx_max_retries=max(0, _as_int("LLM_FILTER_5XX_MAX_RETRIES", 1)),
-        llm_filter_cooldown_sec=max(10, _as_int("LLM_FILTER_COOLDOWN_SEC", 90)),
-        llm_filter_enable_borderline_only=_as_bool("LLM_FILTER_ENABLE_BORDERLINE_ONLY", True),
-        llm_filter_scoring_pass_window=max(1.0, _as_float("LLM_FILTER_SCORING_PASS_WINDOW", 10.0)),
-        llm_filter_ppe_verify_on_missing_only=_as_bool("LLM_FILTER_PPE_VERIFY_ON_MISSING_ONLY", True),
-        llm_filter_retry_initial_delay_ms=max(100, _as_int("LLM_FILTER_RETRY_INITIAL_DELAY_MS", 1000)),
-        llm_filter_retry_max_delay_ms=max(500, _as_int("LLM_FILTER_RETRY_MAX_DELAY_MS", 8000)),
-        llm_filter_retryable_status_codes=_as_int_tuple(
-            "LLM_FILTER_RETRYABLE_STATUS_CODES",
-            (429, 500, 502, 503, 504),
+        inference_batch_concurrency=max(1, _as_int("INFERENCE_BATCH_CONCURRENCY", 2)),
+        sam3_enabled=_as_bool("SAM3_ENABLED", True),
+        sam3_required=_as_bool("SAM3_REQUIRED", False),
+        sam3_checkpoint_path=str(
+            _resolve_path(
+                os.getenv("SAM3_CHECKPOINT_PATH"),
+                model_cache_dir / "sam3" / "sam3.pt",
+            )
         ),
-        llm_filter_max_image_dimension=max(256, min(2048, _as_int("LLM_FILTER_MAX_IMAGE_DIMENSION", 768))),
-        llm_filter_jpeg_quality=max(40, min(95, _as_int("LLM_FILTER_JPEG_QUALITY", 65))),
-        gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
-        gemini_base_url=(
-            os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").strip()
-        ),
-        kaggle_dataset=os.getenv("KAGGLE_DATASET", "alyyan/trash-detection"),
+        sam3_resolution=max(1, _as_int("SAM3_RESOLUTION", 1008)),
+        sam3_confidence_threshold=max(0.0, min(1.0, _as_float("SAM3_CONFIDENCE_THRESHOLD", 0.3))),
+        sam3_prompts=_as_str_tuple("SAM3_PROMPTS", ("dirty area",)),
+        sam3_max_prompts=max(1, _as_int("SAM3_MAX_PROMPTS", 7)),
+        sam3_min_mask_area_px=max(1, _as_int("SAM3_MIN_MASK_AREA_PX", 64)),
+        sam3_device=os.getenv("SAM3_DEVICE", "cpu").strip() or "cpu",
+        sam3_use_bfloat16=_as_bool("SAM3_USE_BFLOAT16", True),
+        sam3_provider=os.getenv("SAM3_PROVIDER", "roboflow").strip().lower() or "roboflow",
+        roboflow_api_url=os.getenv("ROBOFLOW_API_URL", "https://serverless.roboflow.com").strip(),
         roboflow_api_key=os.getenv("ROBOFLOW_API_KEY"),
-        roboflow_workspace=os.getenv("ROBOFLOW_WORKSPACE", "compvision-bfglv"),
+        roboflow_workspace=os.getenv("ROBOFLOW_WORKSPACE", "nams-workspace-fykkb").strip(),
+        roboflow_workflow_id=os.getenv("ROBOFLOW_WORKFLOW_ID", "general-segmentation-api-14").strip(),
+        roboflow_classes=_as_str_tuple("ROBOFLOW_CLASSES", ("Garbage", "Stain", "Stained_Floor", "Wet_Floor")),
+        roboflow_dirty_labels=_as_str_tuple(
+            "ROBOFLOW_DIRTY_LABELS",
+            ("Garbage", "Stain", "Stained_Floor", "dirty_area", "marks", "trash", "debris"),
+        ),
+        roboflow_wet_labels=_as_str_tuple(
+            "ROBOFLOW_WET_LABELS",
+            ("Wet_Floor", "wet_surface", "water", "spill", "puddle"),
+        ),
+        roboflow_use_cache=_as_bool("ROBOFLOW_USE_CACHE", True),
+        gemini_api_key=os.getenv("GEMINI_API_KEY"),
+        gemini_base_url=os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").strip(),
+        ppe_gemini_enabled=_as_bool("PPE_GEMINI_ENABLED", False),
+        ppe_gemini_mode=os.getenv("PPE_GEMINI_MODE", "missing_only").strip().lower() or "missing_only",
+        ppe_gemini_model=os.getenv("PPE_GEMINI_MODEL", "gemini-2.5-flash-lite").strip(),
+        ppe_gemini_timeout_sec=max(1, _as_int("PPE_GEMINI_TIMEOUT_SEC", 8)),
+        kaggle_dataset=os.getenv("KAGGLE_DATASET", "alyyan/trash-detection"),
         roboflow_project=os.getenv("ROBOFLOW_PROJECT", "clean-unclean-floor"),
         roboflow_version=_as_int("ROBOFLOW_VERSION", 1),
         yolo_raw_dir=yolo_raw_dir,

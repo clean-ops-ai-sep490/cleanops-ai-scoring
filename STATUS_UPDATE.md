@@ -1,35 +1,31 @@
 # Cleaning AI POC - Status Update
 
-Date: 2026-04-09
+Date: 2026-05-27
 
 ## 1) Tong quan
-- Du an hien tai da chuyen sang mo hinh Hybrid YOLO + U-Net de danh gia do sach be mat.
-- Backend FastAPI da ho tro cả single image va batch processing.
-- Swagger da duoc dieu chinh de test tien loi hon cho file upload + URL.
+- Du an hien tai dung luong Hybrid Auxiliary Segmentation + YOLO + U-Net de danh gia do sach be mat.
+- Block response `sam3` duoc giu de tuong thich, nhung provider demo uu tien la Roboflow/SAM3-style auxiliary segmentation; YOLO/U-Net van la evidence domain-specific.
+- Gemini/LLM verification da duoc loai khoi active scoring path de giam do tre va phu thuoc external API key.
+- Backend FastAPI ho tro batch processing, visualization blob URL, auxiliary prompt check va PPE evaluate.
 
 ## 2) Tinh trang chuc nang
 ### API san sang
-- Health check: / (production)
+- Health check: /, /health/live, /health/ready, /health/sam3 (production)
 - Batch evaluate: /evaluate-batch (production)
 - Visualization blob URL: /evaluate-url-visualize-link (production)
+- Upload visualization blob URL: /evaluate-visualize-link (internal upload)
+- Auxiliary prompt segmentation compatibility: /check (production)
 - PPE evaluate: /ppe/evaluate (production)
 
-### Internal/debug routes
-- /predict
-- /predict-url
-- /predict-unet
-- /predict-unet-url
-- /predict-url-visualize
-- /predict-unet-url-visualize
-- /evaluate-visualize
-- /evaluate-url-visualize
-- /evaluate-visualize-json
-- /evaluate-url-visualize-json
-- /evaluate-visualize-link
+### Routes da remove/deprecated
+- Cac debug route cu nhu /predict, /predict-url, /predict-unet, /predict-unet-url va cac route visualize JSON/base64 cu da bi remove khoi active API.
+- Backend .NET hien tai chi can /evaluate-batch, /evaluate-url-visualize-link va /ppe/evaluate.
+- Neu can test rieng auxiliary prompt segmentation thi dung /check.
 
 Ghi chu:
-- Flow backend hien tai chi can /evaluate-batch, /evaluate-url-visualize-link, va /ppe/evaluate.
 - Route uu tien de test tay va lay visualization blob URL la /evaluate-url-visualize-link.
+- Response scoring giu contract cu va bo sung dirty_coverage_source, unet_dirty_coverage_pct, sam3_dirty_coverage_pct, combined_dirty_coverage_pct.
+- Response co them block sam3 khi auxiliary detector tra ve ket qua/status.
 
 ### Batch evaluate (cap nhat moi)
 - Gioi han toi da 5 anh/request.
@@ -38,6 +34,11 @@ Ghi chu:
 - Neu 1 anh loi (URL hong, file loi), backend bo qua item do va tiep tuc xu ly cac item khac.
 - Loi item duoc log o backend, khong tra error chi tiet ra response.
 - Response summary co them truong skipped de theo doi so item bo qua.
+
+### Runtime auxiliary segmentation
+- CPU/dev runtime: giu auxiliary segmentation disabled de service van chay nhe voi YOLO/U-Net, khong goi Gemini.
+- Demo nhe: dung Roboflow Workflow lam provider external, khong hardcode API key trong source/report.
+- Local SAM3 chi la compatibility path; smoke test tren host nay bi chan boi CUDA 12.8 vs driver CUDA 12.3, nen khong dung lam claim dinh luong.
 
 ## 3) Tinh trang pipeline training
 ### U-Net multiclass
@@ -55,27 +56,15 @@ Ghi chu:
   - Luu checkpoint tot nhat
 - Da cap nhat model wrapper:
   - src/models/unet_segmenter.py
+- Retrain U-Net chi nen chay khi co approved annotations du chat luong va benchmark baseline/candidate ro rang.
+- YOLO duoc freeze trong scope hien tai de giam bien so khi bao ve promotion gate.
 
-### Notebook
-- Da cap nhat notebook train U-Net:
-  - notebooks/03_train_unet.ipynb
-
-## 4) File chinh dang thay doi trong nhanh hien tai
-- .gitignore
-- .env.example (new)
-- requirements.txt
-- src/api/main.py
-- src/config/settings.py (new)
-- src/config/__init__.py (new)
-- src/download_dataset.py
-- src/train_yolo.py
-- src/models/unet_segmenter.py
-- src/models/yolo_detector.py
-- src/train_unet.py
-- src/preprocess_unet_data.py (new)
-- notebooks/01_pipeline_manager.ipynb
-- notebooks/03_train_unet.ipynb
-- API_USAGE_AND_SCORING.md (new)
+## 4) Benchmark va bao ve
+- Benchmark cleanliness pilot hien nam o benchmarks/cleanliness/pilot_benchmark.csv.
+- Ket qua chay model that nen ghi vao benchmarks/reports/cleanliness_pilot_evaluated.csv.
+- Summary bao ve nen sinh bang scripts/summarize_pilot_benchmark.py thanh JSON va Markdown.
+- PPE benchmark la capability rieng; khong tron metric PPE vao cleanliness scoring.
+- Golden mask benchmark chua tao vi repo chua co polygon/mask that da duyet.
 
 ## 5) Ve quan ly file de push
 - Da bo sung .gitignore de chan cac file khong can thiet:
@@ -90,8 +79,10 @@ Ghi chu:
 - Da bo hard-code API key Roboflow trong source.
 - Da dua cac bien config quan trong (model path, timeout, threshold, host/port, train defaults) ve .env.
 - API, downloader, train scripts va notebook manager da doc config tu .env.
+- Auxiliary/SAM3 compatibility config nam trong .env.example; Roboflow key phai de trong env/secret runtime, khong commit.
 
-## 7) Luu y truoc khi merge
-- Chua co bo test tu dong cho API va training scripts.
-- Nen chot them API contract (schema response) cho frontend/backend tich hop on dinh.
-- Neu can reproducible training, nen bo sung file cau hinh (yaml/json) cho hyper-parameters.
+## 7) Luu y truoc khi demo/bao ve
+- Chay Python unit tests: python -m unittest discover -s tests -v.
+- Chay backend ScoringJobServiceTests de xac nhan contract sam3/visualization payload.
+- Smoke test /health/ready, /health/sam3 va /evaluate-url-visualize-link voi service dang chay.
+- Chay cleanliness pilot benchmark va commit report that neu dung lam bang chung.

@@ -12,7 +12,7 @@ from src.config.settings import settings
 def create_app() -> FastAPI:
     app = FastAPI(
         title="CleanOps AI Service",
-        description="Unified AI service for scoring and PPE inference.",
+        description="Unified AI service for hybrid cleanliness scoring and PPE inference.",
         version="1.0.0",
         openapi_tags=[
             {
@@ -21,7 +21,7 @@ def create_app() -> FastAPI:
             },
             {
                 "name": "scoring",
-                "description": "Cleaning scoring inference and visualization endpoints.",
+                "description": "Auxiliary segmentation, YOLO, and U-Net cleaning scoring inference and visualization endpoints.",
             },
             {
                 "name": "ppe",
