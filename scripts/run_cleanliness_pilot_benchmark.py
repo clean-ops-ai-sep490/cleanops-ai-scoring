@@ -30,7 +30,25 @@ DEFAULT_FIELDS = [
     "latency_ms",
     "dirty_coverage_source",
     "unet_dirty_coverage_pct",
+    "unet_stain_or_water_coverage_pct",
+    "unet_wet_surface_coverage_pct",
     "sam3_dirty_coverage_pct",
+    "sam3_raw_coverage_pct",
+    "sam3_scored_coverage_pct",
+    "sam3_advisory_coverage_pct",
+    "sam3_scored_predictions_count",
+    "sam3_advisory_predictions_count",
+    "sam3_rejected_predictions_count",
+    "sam3_filter_rules",
+    "raw_combined_dirty_coverage_pct",
+    "effective_dirty_coverage_pct",
+    "coverage_adjustment_reason",
+    "coverage_adjustment_factor",
+    "floor_like_overmask_detected",
+    "unet_component_count",
+    "unet_largest_component_area_pct",
+    "unet_largest_component_bottom_touch",
+    "unet_largest_component_bottom_area_ratio",
     "combined_dirty_coverage_pct",
     "sam3_status",
     "sam3_predictions_count",
@@ -125,7 +143,28 @@ def run_benchmark(
                 row["pass_threshold"] = scoring.get("pass_threshold", row.get("pass_threshold", ""))
                 row["dirty_coverage_source"] = scoring.get("dirty_coverage_source", "")
                 row["unet_dirty_coverage_pct"] = scoring.get("unet_dirty_coverage_pct", "")
+                row["unet_stain_or_water_coverage_pct"] = scoring.get("unet_stain_or_water_coverage_pct", "")
+                row["unet_wet_surface_coverage_pct"] = scoring.get("unet_wet_surface_coverage_pct", "")
                 row["sam3_dirty_coverage_pct"] = scoring.get("sam3_dirty_coverage_pct", "")
+                row["sam3_raw_coverage_pct"] = scoring.get("sam3_raw_coverage_pct", "")
+                row["sam3_scored_coverage_pct"] = scoring.get("sam3_scored_coverage_pct", "")
+                row["sam3_advisory_coverage_pct"] = scoring.get("sam3_advisory_coverage_pct", "")
+                row["sam3_scored_predictions_count"] = scoring.get("sam3_scored_predictions_count", "")
+                row["sam3_advisory_predictions_count"] = scoring.get("sam3_advisory_predictions_count", "")
+                row["sam3_rejected_predictions_count"] = scoring.get("sam3_rejected_predictions_count", "")
+                row["sam3_filter_rules"] = ",".join(str(item) for item in scoring.get("sam3_filter_rules", []) or [])
+                row["raw_combined_dirty_coverage_pct"] = scoring.get("raw_combined_dirty_coverage_pct", "")
+                row["effective_dirty_coverage_pct"] = scoring.get("effective_dirty_coverage_pct", "")
+                row["coverage_adjustment_reason"] = scoring.get("coverage_adjustment_reason", "")
+                row["coverage_adjustment_factor"] = scoring.get("coverage_adjustment_factor", "")
+                row["floor_like_overmask_detected"] = scoring.get("floor_like_overmask_detected", "")
+                row["unet_component_count"] = scoring.get("unet_component_count", "")
+                row["unet_largest_component_area_pct"] = scoring.get("unet_largest_component_area_pct", "")
+                row["unet_largest_component_bottom_touch"] = scoring.get("unet_largest_component_bottom_touch", "")
+                row["unet_largest_component_bottom_area_ratio"] = scoring.get(
+                    "unet_largest_component_bottom_area_ratio",
+                    "",
+                )
                 row["combined_dirty_coverage_pct"] = scoring.get("combined_dirty_coverage_pct", "")
                 row["sam3_status"] = sam3.get("status", "")
                 row["sam3_predictions_count"] = _nested_value(sam3, "summary", "predictions_count")

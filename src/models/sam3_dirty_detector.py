@@ -197,7 +197,7 @@ def _bbox_from_prediction(prediction: dict[str, Any], *, width: int, height: int
     ]
 
 
-def _mask_from_roboflow_prediction(prediction: dict[str, Any], *, width: int, height: int) -> np.ndarray:
+def _mask_from_roboflow_prediction(prediction: dict[str, Any], *, width: int, height: int) -> tuple[np.ndarray, str]:
     mask = np.zeros((height, width), dtype=np.uint8)
     points = (
         _as_point_list(prediction.get("points"))
@@ -210,12 +210,12 @@ def _mask_from_roboflow_prediction(prediction: dict[str, Any], *, width: int, he
             dtype=np.int32,
         )
         cv2.fillPoly(mask, [clipped], 1)
-        return mask
+        return mask, "polygon"
 
     x0, y0, x1, y1 = _bbox_from_prediction(prediction, width=width, height=height)
     if x1 > x0 and y1 > y0:
         mask[y0:y1, x0:x1] = 1
-    return mask
+    return mask, "bbox_fallback"
 
 
 class Sam3DirtyDetector:
@@ -371,6 +371,7 @@ class Sam3DirtyDetector:
         regions: list[dict[str, Any]] = []
         union_mask = np.zeros((height, width), dtype=np.uint8)
         label_masks: dict[str, np.ndarray] = {}
+        prediction_masks: list[dict[str, Any]] = []
         region_id = 1
 
         autocast_enabled = self.config.device == "cuda" and self.config.use_bfloat16
@@ -398,9 +399,12 @@ class Sam3DirtyDetector:
                         raw_box = boxes[idx] if boxes.ndim >= 2 and idx < len(boxes) else []
                         bbox = _coerce_bbox(raw_box, mask, width=width, height=height)
                         x0, y0, x1, y1 = bbox
+                        area_pct = round((area_px / max(1, width * height)) * 100.0, 3)
+                        label_key = _normalize_label_key(prompt)
                         prediction = {
                             "class": prompt,
                             "prompt": prompt,
+                            "label_normalized": label_key,
                             "confidence": round(score, 4),
                             "bbox_xyxy": bbox,
                             "x": x0,
@@ -408,6 +412,8 @@ class Sam3DirtyDetector:
                             "width": max(0, x1 - x0),
                             "height": max(0, y1 - y0),
                             "mask_area_px": area_px,
+                            "area_pct": area_pct,
+                            "mask_source": "model_mask",
                         }
                         predictions.append(prediction)
                         regions.append(
@@ -416,6 +422,7 @@ class Sam3DirtyDetector:
                                 "class_id": 3,
                                 "kind_hint": prompt,
                                 "label": prompt,
+                                "label_normalized": label_key,
                                 "confidence": round(score, 4),
                                 "bbox_px": bbox,
                                 "bbox_norm": [
@@ -424,11 +431,21 @@ class Sam3DirtyDetector:
                                     round(x1 / max(1, width), 4),
                                     round(y1 / max(1, height), 4),
                                 ],
-                                "area_pct": round((area_px / max(1, width * height)) * 100.0, 3),
+                                "area_pct": area_pct,
+                                "mask_source": "model_mask",
+                            }
+                        )
+                        prediction_masks.append(
+                            {
+                                "label": prompt,
+                                "label_normalized": label_key,
+                                "confidence": round(score, 4),
+                                "area_pct": area_pct,
+                                "mask_source": "model_mask",
+                                "mask": mask,
                             }
                         )
                         union_mask = np.maximum(union_mask, mask)
-                        label_key = _normalize_label_key(prompt)
                         if label_key:
                             label_masks[label_key] = np.maximum(
                                 label_masks.get(label_key, np.zeros((height, width), dtype=np.uint8)),
@@ -457,6 +474,7 @@ class Sam3DirtyDetector:
                 },
                 "_mask_union": union_mask,
                 "_label_masks": label_masks,
+                "_prediction_masks": prediction_masks,
             }
         except Exception as exc:  # noqa: BLE001
             self._last_error = f"{type(exc).__name__}: {exc}"
@@ -500,6 +518,7 @@ class Sam3DirtyDetector:
             regions: list[dict[str, Any]] = []
             union_mask = np.zeros((height, width), dtype=np.uint8)
             label_masks: dict[str, np.ndarray] = {}
+            prediction_masks: list[dict[str, Any]] = []
             region_id = 1
 
             for raw_prediction in _iter_prediction_dicts(raw_result):
@@ -520,17 +539,20 @@ class Sam3DirtyDetector:
                 if score > 1.0:
                     score = score / 100.0
 
-                mask = _mask_from_roboflow_prediction(raw_prediction, width=width, height=height)
+                mask, mask_source = _mask_from_roboflow_prediction(raw_prediction, width=width, height=height)
                 area_px = int(mask.sum())
                 if score < threshold_value or area_px < self.config.min_mask_area_px:
                     continue
 
                 bbox = _bbox_from_mask(mask)
                 x0, y0, x1, y1 = bbox
+                area_pct = round((area_px / max(1, width * height)) * 100.0, 3)
+                label_key = _normalize_label_key(label)
                 predictions.append(
                     {
                         "class": label,
                         "prompt": label,
+                        "label_normalized": label_key,
                         "confidence": round(score, 4),
                         "bbox_xyxy": bbox,
                         "x": x0,
@@ -538,6 +560,8 @@ class Sam3DirtyDetector:
                         "width": max(0, x1 - x0),
                         "height": max(0, y1 - y0),
                         "mask_area_px": area_px,
+                        "area_pct": area_pct,
+                        "mask_source": mask_source,
                         "provider": "roboflow",
                     }
                 )
@@ -547,6 +571,7 @@ class Sam3DirtyDetector:
                         "class_id": 3,
                         "kind_hint": label,
                         "label": label,
+                        "label_normalized": label_key,
                         "confidence": round(score, 4),
                         "bbox_px": bbox,
                         "bbox_norm": [
@@ -555,12 +580,23 @@ class Sam3DirtyDetector:
                             round(x1 / max(1, width), 4),
                             round(y1 / max(1, height), 4),
                         ],
-                        "area_pct": round((area_px / max(1, width * height)) * 100.0, 3),
+                        "area_pct": area_pct,
+                        "mask_source": mask_source,
                         "provider": "roboflow",
                     }
                 )
+                prediction_masks.append(
+                    {
+                        "label": label,
+                        "label_normalized": label_key,
+                        "confidence": round(score, 4),
+                        "area_pct": area_pct,
+                        "mask_source": mask_source,
+                        "provider": "roboflow",
+                        "mask": mask,
+                    }
+                )
                 union_mask = np.maximum(union_mask, mask)
-                label_key = _normalize_label_key(label)
                 if label_key:
                     label_masks[label_key] = np.maximum(
                         label_masks.get(label_key, np.zeros((height, width), dtype=np.uint8)),
@@ -590,6 +626,7 @@ class Sam3DirtyDetector:
                 },
                 "_mask_union": union_mask,
                 "_label_masks": label_masks,
+                "_prediction_masks": prediction_masks,
             }
         except Exception as exc:  # noqa: BLE001
             self._last_error = f"{type(exc).__name__}: {exc}"
@@ -628,6 +665,7 @@ class Sam3DirtyDetector:
             },
             "_mask_union": np.zeros((height, width), dtype=np.uint8),
             "_label_masks": {},
+            "_prediction_masks": [],
         }
 
 

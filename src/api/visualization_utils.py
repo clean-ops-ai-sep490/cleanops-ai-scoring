@@ -300,6 +300,15 @@ def render_hybrid_overlay(
             core_lines.append("REVIEW REQUIRED")
 
     optional_lines: list[str] = []
+    raw_dirty_coverage = scoring.get("raw_combined_dirty_coverage_pct")
+    if (
+        raw_dirty_coverage is not None
+        and abs(float(raw_dirty_coverage) - float(dirty_coverage)) >= 0.01
+    ):
+        optional_lines.append(f"RAW COVERAGE: {float(raw_dirty_coverage):.2f}%")
+        reason = str(scoring.get("coverage_adjustment_reason", "")).strip()
+        if reason:
+            optional_lines.append(f"ADJUSTED: {_truncate_text(reason, 36)}")
     if not compact_mode:
         optional_lines.append(f"OBJECT PENALTY: {float(scoring.get('object_penalty', 0.0)):.2f}")
         optional_lines.append(f"ENV: {env_key}")

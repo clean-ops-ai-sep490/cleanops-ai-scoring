@@ -195,6 +195,26 @@ class VisualizationUtilsTests(unittest.TestCase):
         self.assertTrue(any(text == "RAW: FAIL -> PENDING" for text in panel_texts))
         self.assertTrue(any(text == "REVIEW REQUIRED" for text in panel_texts))
 
+    def test_renderer_shows_raw_coverage_when_effective_coverage_is_adjusted(self):
+        _, panel_texts = self._render_with_capture(
+            yolo_result={"detections_count": 0, "results": []},
+            scoring={
+                "verdict": "PASS",
+                "quality_score": 94.0,
+                "base_clean_score": 94.0,
+                "raw_combined_dirty_coverage_pct": 60.0,
+                "combined_dirty_coverage_pct": 6.0,
+                "coverage_adjustment_reason": "floor_like_overmask_discount",
+                "object_penalty": 0.0,
+                "penalty_detections_count": 0,
+                "penalty_detection_indexes": [],
+            },
+        )
+
+        self.assertTrue(any(text == "DIRTY COVERAGE: 6.00%" for text in panel_texts))
+        self.assertTrue(any(text == "RAW COVERAGE: 60.00%" for text in panel_texts))
+        self.assertTrue(any(text == "ADJUSTED: floor_like_overmask_discount" for text in panel_texts))
+
 
 if __name__ == "__main__":
     unittest.main()

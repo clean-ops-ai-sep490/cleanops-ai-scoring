@@ -407,6 +407,7 @@ def evaluate_image_with_artifacts(
         sam3_result,
         dirty_labels=settings.roboflow_dirty_labels,
         wet_labels=settings.roboflow_wet_labels,
+        env_key=env_key,
     )
     merged_mask = coverage_summary.pop("merged_mask")
     penalty_summary = summarize_penalty_detections_impl(

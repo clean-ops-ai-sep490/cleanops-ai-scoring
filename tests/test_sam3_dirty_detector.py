@@ -78,6 +78,10 @@ class Sam3DirtyDetectorTests(unittest.TestCase):
         self.assertEqual(result["predictions"][0]["confidence"], 0.73)
         self.assertEqual(result["predictions"][0]["bbox_xyxy"], [3, 2, 8, 6])
         self.assertEqual(result["predictions"][0]["mask_area_px"], 20)
+        self.assertEqual(result["predictions"][0]["area_pct"], 20.0)
+        self.assertEqual(result["predictions"][0]["mask_source"], "model_mask")
+        self.assertEqual(result["predictions"][0]["label_normalized"], "stain")
+        self.assertEqual(result["_prediction_masks"][0]["mask_source"], "model_mask")
 
     def test_public_payload_removes_internal_masks(self):
         public = public_sam3_payload({"predictions": [], "_mask_union": np.zeros((2, 2), dtype=np.uint8)})
@@ -136,11 +140,65 @@ class Sam3DirtyDetectorTests(unittest.TestCase):
         self.assertEqual(result["summary"]["predictions_count"], 1)
         self.assertEqual(result["summary"]["dirty_coverage_pct"], 16.0)
         self.assertEqual(result["predictions"][0]["class"], "Stain")
+        self.assertEqual(result["predictions"][0]["area_pct"], 16.0)
+        self.assertEqual(result["predictions"][0]["mask_source"], "bbox_fallback")
+        self.assertEqual(result["predictions"][0]["label_normalized"], "stain")
         self.assertEqual(
             fake_client.kwargs["parameters"]["classes"],
             "Garbage, Stain, Stained_Floor, Wet_Floor",
         )
         self.assertIn("stain", result["_label_masks"])
+        self.assertEqual(result["_prediction_masks"][0]["mask_source"], "bbox_fallback")
+
+    def test_roboflow_polygon_marks_mask_source_polygon(self):
+        class FakeRoboflowClient:
+            def run_workflow(self, **kwargs):
+                return {
+                    "predictions": [
+                        {
+                            "class": "Garbage",
+                            "confidence": 0.9,
+                            "points": [
+                                {"x": 1, "y": 1},
+                                {"x": 5, "y": 1},
+                                {"x": 5, "y": 5},
+                                {"x": 1, "y": 5},
+                            ],
+                        }
+                    ]
+                }
+
+        config = Sam3DetectorConfig(
+            enabled=True,
+            required=False,
+            checkpoint_path="",
+            resolution=512,
+            confidence_threshold=0.3,
+            default_prompts=("Garbage",),
+            max_prompts=7,
+            min_mask_area_px=1,
+            device="cpu",
+            use_bfloat16=False,
+            provider="roboflow",
+            roboflow_api_key="test-key",
+            roboflow_workspace="workspace",
+            roboflow_workflow_id="workflow",
+            roboflow_classes=("Garbage",),
+        )
+        detector = Sam3DirtyDetector.__new__(Sam3DirtyDetector)
+        detector.config = config
+        detector._logger = logging.getLogger("test-sam3-roboflow-polygon")
+        detector._model = None
+        detector._processor = None
+        detector._roboflow_client = FakeRoboflowClient()
+        detector._loaded = True
+        detector._last_error = None
+        detector._model_source = "roboflow:workspace/workflow"
+
+        result = detector.detect(Image.new("RGB", (10, 10), color=(200, 200, 200)), prompts="Garbage")
+
+        self.assertEqual(result["predictions"][0]["mask_source"], "polygon")
+        self.assertEqual(result["predictions"][0]["label_normalized"], "garbage")
 
 
 if __name__ == "__main__":
