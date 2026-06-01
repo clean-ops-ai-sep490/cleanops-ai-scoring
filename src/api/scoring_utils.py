@@ -273,6 +273,10 @@ def _pending_quality(raw_quality: float, pass_threshold: float, pending_lower_bo
     return round(clamp(target, pending_lower_bound, pass_threshold - 0.001), 3)
 
 
+def _fail_decision_score(raw_quality: float, pending_lower_bound: float) -> float:
+    return round(clamp(min(raw_quality, pending_lower_bound - 0.001), 0.0, 100.0), 3)
+
+
 def calibrate_score(
     scoring: Dict[str, object],
     *,
@@ -306,9 +310,14 @@ def calibrate_score(
 
     calibrated["raw_verdict"] = raw_verdict
     calibrated["raw_quality_score"] = round(raw_quality, 3)
+    calibrated["decision_score"] = round(raw_quality, 3)
     calibrated["calibrated"] = False
     calibrated["calibration_rules"] = []
     calibrated["calibration_reason"] = ""
+    calibrated["review_required"] = False
+    calibrated["verdict_source"] = "score"
+    calibrated["verdict_reason_code"] = raw_verdict.lower() if raw_verdict else ""
+    calibrated["risk_flags"] = []
 
     if not enabled:
         return calibrated
@@ -334,14 +343,11 @@ def calibrate_score(
         if raw_verdict == "FAIL" and penalty_count == 0 and combined_pct < 85.0:
             rules.append("coverage_only_fail_review")
             calibrated["verdict"] = "PENDING"
-            calibrated["quality_score"] = round(max(raw_quality, pending_lower_bound), 3)
+            calibrated["decision_score"] = _pending_quality(raw_quality, pass_threshold, pending_lower_bound)
         elif raw_verdict != "FAIL":
             rules.append("strong_multi_source_dirty")
             calibrated["verdict"] = "FAIL"
-            calibrated["quality_score"] = round(
-                clamp(min(raw_quality, pending_lower_bound - 0.001), 0.0, 100.0),
-                3,
-            )
+            calibrated["decision_score"] = _fail_decision_score(raw_quality, pending_lower_bound)
     elif (
         raw_verdict == "PASS"
         and env_normalized in high_risk_envs
@@ -351,7 +357,7 @@ def calibrate_score(
     ):
         rules.append("high_risk_weak_evidence_review")
         calibrated["verdict"] = "PENDING"
-        calibrated["quality_score"] = _pending_quality(raw_quality, pass_threshold, pending_lower_bound)
+        calibrated["decision_score"] = _pending_quality(raw_quality, pass_threshold, pending_lower_bound)
     elif (
         raw_verdict == "PASS"
         and ignored_count >= max(1, int(ignored_object_review_count))
@@ -360,7 +366,25 @@ def calibrate_score(
     ):
         rules.append("ignored_objects_review")
         calibrated["verdict"] = "PENDING"
-        calibrated["quality_score"] = _pending_quality(raw_quality, pass_threshold, pending_lower_bound)
+        calibrated["decision_score"] = _pending_quality(raw_quality, pass_threshold, pending_lower_bound)
+    elif (
+        raw_verdict == "PASS"
+        and combined_pct >= 5.0
+        and raw_quality < pass_threshold + 5.0
+        and penalty_count == 0
+    ):
+        rules.append("near_threshold_dirty_review")
+        calibrated["verdict"] = "PENDING"
+        calibrated["decision_score"] = _pending_quality(raw_quality, pass_threshold, pending_lower_bound)
+    elif (
+        raw_verdict == "PENDING"
+        and env_normalized in (high_risk_envs | {"OUTDOOR_LANDSCAPE"})
+        and combined_pct >= 40.0
+        and sam3_predictions >= 10
+    ):
+        rules.append("dense_dirty_regions_fail")
+        calibrated["verdict"] = "FAIL"
+        calibrated["decision_score"] = _fail_decision_score(raw_quality, pending_lower_bound)
     elif (
         raw_verdict == "FAIL"
         and source == "unet"
@@ -370,7 +394,7 @@ def calibrate_score(
     ):
         rules.append("unet_only_high_coverage_review")
         calibrated["verdict"] = "PENDING"
-        calibrated["quality_score"] = round(max(raw_quality, pending_lower_bound), 3)
+        calibrated["decision_score"] = _pending_quality(raw_quality, pass_threshold, pending_lower_bound)
     elif (
         raw_verdict == "FAIL"
         and source == "sam3"
@@ -380,7 +404,7 @@ def calibrate_score(
     ):
         rules.append("single_sam3_large_mask_review")
         calibrated["verdict"] = "PENDING"
-        calibrated["quality_score"] = round(max(raw_quality, pending_lower_bound), 3)
+        calibrated["decision_score"] = _pending_quality(raw_quality, pass_threshold, pending_lower_bound)
     elif (
         raw_verdict == "FAIL"
         and source in {"sam3", "merged"}
@@ -390,14 +414,22 @@ def calibrate_score(
     ):
         rules.append("auxiliary_segmentation_review")
         calibrated["verdict"] = "PENDING"
-        calibrated["quality_score"] = round(max(raw_quality, pending_lower_bound), 3)
+        calibrated["decision_score"] = _pending_quality(raw_quality, pass_threshold, pending_lower_bound)
 
     if rules:
+        review_required = calibrated["verdict"] == "PENDING"
         calibrated["calibrated"] = True
         calibrated["calibration_rules"] = rules
         calibrated["calibration_reason"] = "; ".join(rules)
+        calibrated["review_required"] = review_required
+        calibrated["verdict_source"] = "calibration"
+        calibrated["verdict_reason_code"] = rules[0]
+        calibrated["risk_flags"] = rules
         reasons = list(calibrated.get("reasons") or [])
-        reasons.append("calibration review required")
+        if review_required:
+            reasons.append("calibration review required")
+        else:
+            reasons.append("strong dirty evidence")
         calibrated["reasons"] = reasons
 
     return calibrated

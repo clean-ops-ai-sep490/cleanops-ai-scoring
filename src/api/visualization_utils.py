@@ -282,22 +282,27 @@ def render_hybrid_overlay(
         "FAIL": (40, 40, 220),
     }
     verdict_color = verdict_colors.get(verdict, (180, 180, 180))
+    dirty_coverage = scoring.get("combined_dirty_coverage_pct")
+    if dirty_coverage is None:
+        dirty_coverage = 100.0 - float(scoring.get("base_clean_score", 0.0))
 
     core_lines = [
         f"VERDICT: {verdict}",
         f"QUALITY SCORE: {float(scoring.get('quality_score', 0.0)):.2f}",
-        f"DIRTY COVERAGE: {float(100.0 - float(scoring.get('base_clean_score', 0.0))):.2f}%",
+        f"DIRTY COVERAGE: {float(dirty_coverage):.2f}%",
         f"PENALTY OBJECTS: {int(scoring.get('penalty_detections_count', 0))}",
     ]
+    if bool(scoring.get("calibrated")):
+        raw_verdict = str(scoring.get("raw_verdict", "")).upper()
+        if raw_verdict and raw_verdict != verdict:
+            core_lines.append(f"RAW: {raw_verdict} -> {verdict}")
+        if bool(scoring.get("review_required", True)):
+            core_lines.append("REVIEW REQUIRED")
+
     optional_lines: list[str] = []
     if not compact_mode:
         optional_lines.append(f"OBJECT PENALTY: {float(scoring.get('object_penalty', 0.0)):.2f}")
         optional_lines.append(f"ENV: {env_key}")
-    if bool(scoring.get("calibrated")) and not compact_mode:
-        raw_verdict = str(scoring.get("raw_verdict", "")).upper()
-        if raw_verdict and raw_verdict != verdict:
-            optional_lines.append(f"RAW: {raw_verdict} -> {verdict}")
-        optional_lines.append("CALIBRATED: review required")
     if (highlight_region_ids or advisory_object_boxes or advisory_dirty_boxes) and not compact_mode:
         optional_lines.append("AI REVIEWED OVERLAY")
     overlay_summary = str(visual_review.get("overlay_summary", "")).strip()

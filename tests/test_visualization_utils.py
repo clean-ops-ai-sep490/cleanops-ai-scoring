@@ -154,18 +154,46 @@ class VisualizationUtilsTests(unittest.TestCase):
             scoring={
                 "verdict": "PENDING",
                 "raw_verdict": "PASS",
-                "quality_score": 84.999,
+                "quality_score": 100.0,
+                "decision_score": 84.999,
+                "combined_dirty_coverage_pct": 0.0,
                 "base_clean_score": 100.0,
                 "object_penalty": 0.0,
                 "penalty_detections_count": 0,
                 "penalty_detection_indexes": [],
                 "calibrated": True,
+                "review_required": True,
                 "calibration_rules": ["high_risk_weak_evidence_review"],
             },
         )
 
+        self.assertTrue(any(text == "QUALITY SCORE: 100.00" for text in panel_texts))
         self.assertTrue(any(text == "RAW: PASS -> PENDING" for text in panel_texts))
-        self.assertTrue(any(text == "CALIBRATED: review required" for text in panel_texts))
+        self.assertTrue(any(text == "REVIEW REQUIRED" for text in panel_texts))
+
+    def test_renderer_uses_combined_dirty_coverage_when_present(self):
+        _, panel_texts = self._render_with_capture(
+            yolo_result={"detections_count": 0, "results": []},
+            scoring={
+                "verdict": "PENDING",
+                "raw_verdict": "FAIL",
+                "quality_score": 35.0,
+                "decision_score": 50.0,
+                "base_clean_score": 80.0,
+                "combined_dirty_coverage_pct": 65.0,
+                "object_penalty": 0.0,
+                "penalty_detections_count": 0,
+                "penalty_detection_indexes": [],
+                "calibrated": True,
+                "review_required": True,
+                "calibration_rules": ["single_sam3_large_mask_review"],
+            },
+        )
+
+        self.assertTrue(any(text == "QUALITY SCORE: 35.00" for text in panel_texts))
+        self.assertTrue(any(text == "DIRTY COVERAGE: 65.00%" for text in panel_texts))
+        self.assertTrue(any(text == "RAW: FAIL -> PENDING" for text in panel_texts))
+        self.assertTrue(any(text == "REVIEW REQUIRED" for text in panel_texts))
 
 
 if __name__ == "__main__":

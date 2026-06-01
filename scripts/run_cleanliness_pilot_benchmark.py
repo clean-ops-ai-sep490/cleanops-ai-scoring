@@ -18,7 +18,12 @@ DEFAULT_FIELDS = [
     "quality_score",
     "raw_verdict",
     "raw_quality_score",
+    "decision_score",
     "calibrated",
+    "review_required",
+    "verdict_source",
+    "verdict_reason_code",
+    "risk_flags",
     "calibration_rules",
     "calibration_reason",
     "pass_threshold",
@@ -109,7 +114,12 @@ def run_benchmark(
                 row["quality_score"] = scoring.get("quality_score", "")
                 row["raw_verdict"] = str(scoring.get("raw_verdict", "")).upper()
                 row["raw_quality_score"] = scoring.get("raw_quality_score", "")
+                row["decision_score"] = scoring.get("decision_score", "")
                 row["calibrated"] = scoring.get("calibrated", "")
+                row["review_required"] = scoring.get("review_required", "")
+                row["verdict_source"] = scoring.get("verdict_source", "")
+                row["verdict_reason_code"] = scoring.get("verdict_reason_code", "")
+                row["risk_flags"] = ",".join(str(item) for item in scoring.get("risk_flags", []) or [])
                 row["calibration_rules"] = ",".join(str(item) for item in scoring.get("calibration_rules", []) or [])
                 row["calibration_reason"] = scoring.get("calibration_reason", "")
                 row["pass_threshold"] = scoring.get("pass_threshold", row.get("pass_threshold", ""))

@@ -228,7 +228,14 @@ class ScoringUtilsTests(unittest.TestCase):
         )
 
         self.assertEqual(calibrated["raw_verdict"], "PASS")
+        self.assertEqual(calibrated["raw_quality_score"], 100.0)
+        self.assertEqual(calibrated["quality_score"], 100.0)
+        self.assertEqual(calibrated["decision_score"], 84.999)
         self.assertEqual(calibrated["verdict"], "PENDING")
+        self.assertTrue(calibrated["review_required"])
+        self.assertEqual(calibrated["verdict_source"], "calibration")
+        self.assertEqual(calibrated["verdict_reason_code"], "high_risk_weak_evidence_review")
+        self.assertIn("high_risk_weak_evidence_review", calibrated["risk_flags"])
         self.assertTrue(calibrated["calibrated"])
         self.assertIn("high_risk_weak_evidence_review", calibrated["calibration_rules"])
 
@@ -253,8 +260,36 @@ class ScoringUtilsTests(unittest.TestCase):
         )
 
         self.assertEqual(calibrated["verdict"], "PENDING")
+        self.assertEqual(calibrated["quality_score"], 94.374)
+        self.assertEqual(calibrated["decision_score"], 89.999)
+        self.assertTrue(calibrated["review_required"])
         self.assertTrue(calibrated["calibrated"])
         self.assertIn("ignored_objects_review", calibrated["calibration_rules"])
+
+    def test_calibration_downgrades_near_threshold_dirty_pass_without_changing_quality(self):
+        calibrated = calibrate_score(
+            {
+                "verdict": "PASS",
+                "quality_score": 93.804,
+                "pass_threshold": 90.0,
+                "penalty_detections_count": 0,
+                "ignored_detections_count": 0,
+                "unet_dirty_coverage_pct": 6.196,
+                "sam3_dirty_coverage_pct": 0.0,
+                "combined_dirty_coverage_pct": 6.196,
+                "dirty_coverage_source": "unet",
+                "sam3_predictions_count": 0,
+                "reasons": ["good cleanliness"],
+            },
+            env_key="LOBBY_CORRIDOR",
+            pending_lower_bound=50.0,
+        )
+
+        self.assertEqual(calibrated["verdict"], "PENDING")
+        self.assertEqual(calibrated["quality_score"], 93.804)
+        self.assertEqual(calibrated["decision_score"], 89.999)
+        self.assertTrue(calibrated["review_required"])
+        self.assertIn("near_threshold_dirty_review", calibrated["calibration_rules"])
 
     def test_calibration_ignores_non_review_ignored_object_labels(self):
         calibrated = calibrate_score(
@@ -300,8 +335,35 @@ class ScoringUtilsTests(unittest.TestCase):
         )
 
         self.assertEqual(calibrated["verdict"], "PENDING")
-        self.assertGreaterEqual(calibrated["quality_score"], 50.0)
+        self.assertEqual(calibrated["quality_score"], 43.907)
+        self.assertGreaterEqual(calibrated["decision_score"], 50.0)
+        self.assertTrue(calibrated["review_required"])
         self.assertIn("unet_only_high_coverage_review", calibrated["calibration_rules"])
+
+    def test_calibration_moves_dense_dirty_pending_to_fail(self):
+        calibrated = calibrate_score(
+            {
+                "verdict": "PENDING",
+                "quality_score": 52.704,
+                "pass_threshold": 85.0,
+                "penalty_detections_count": 0,
+                "ignored_detections_count": 0,
+                "unet_dirty_coverage_pct": 20.575,
+                "sam3_dirty_coverage_pct": 46.743,
+                "combined_dirty_coverage_pct": 47.296,
+                "dirty_coverage_source": "merged",
+                "sam3_predictions_count": 43,
+                "reasons": ["coverage high"],
+            },
+            env_key="RESTROOM",
+            pending_lower_bound=50.0,
+        )
+
+        self.assertEqual(calibrated["verdict"], "FAIL")
+        self.assertEqual(calibrated["quality_score"], 52.704)
+        self.assertLess(calibrated["decision_score"], 50.0)
+        self.assertFalse(calibrated["review_required"])
+        self.assertIn("dense_dirty_regions_fail", calibrated["calibration_rules"])
 
     def test_calibration_moves_single_sam3_large_mask_fail_to_pending(self):
         calibrated = calibrate_score(
@@ -323,6 +385,9 @@ class ScoringUtilsTests(unittest.TestCase):
         )
 
         self.assertEqual(calibrated["verdict"], "PENDING")
+        self.assertEqual(calibrated["quality_score"], 39.502)
+        self.assertGreaterEqual(calibrated["decision_score"], 50.0)
+        self.assertTrue(calibrated["review_required"])
         self.assertIn("single_sam3_large_mask_review", calibrated["calibration_rules"])
 
     def test_calibration_moves_auxiliary_merged_fail_to_pending(self):
@@ -345,6 +410,9 @@ class ScoringUtilsTests(unittest.TestCase):
         )
 
         self.assertEqual(calibrated["verdict"], "PENDING")
+        self.assertEqual(calibrated["quality_score"], 35.0)
+        self.assertGreaterEqual(calibrated["decision_score"], 50.0)
+        self.assertTrue(calibrated["review_required"])
         self.assertIn("auxiliary_segmentation_review", calibrated["calibration_rules"])
 
     def test_calibration_moves_weak_merged_union_fail_to_pending(self):
@@ -367,6 +435,9 @@ class ScoringUtilsTests(unittest.TestCase):
         )
 
         self.assertEqual(calibrated["verdict"], "PENDING")
+        self.assertEqual(calibrated["quality_score"], 42.0)
+        self.assertGreaterEqual(calibrated["decision_score"], 50.0)
+        self.assertTrue(calibrated["review_required"])
         self.assertIn("auxiliary_segmentation_review", calibrated["calibration_rules"])
 
     def test_calibration_keeps_strong_multi_source_dirty_fail(self):
@@ -389,6 +460,9 @@ class ScoringUtilsTests(unittest.TestCase):
         )
 
         self.assertEqual(calibrated["verdict"], "FAIL")
+        self.assertEqual(calibrated["quality_score"], 55.0)
+        self.assertLess(calibrated["decision_score"], 50.0)
+        self.assertFalse(calibrated["review_required"])
         self.assertTrue(calibrated["calibrated"])
         self.assertIn("strong_multi_source_dirty", calibrated["calibration_rules"])
 
@@ -412,6 +486,9 @@ class ScoringUtilsTests(unittest.TestCase):
         )
 
         self.assertEqual(calibrated["verdict"], "PENDING")
+        self.assertEqual(calibrated["quality_score"], 28.0)
+        self.assertGreaterEqual(calibrated["decision_score"], 50.0)
+        self.assertTrue(calibrated["review_required"])
         self.assertTrue(calibrated["calibrated"])
         self.assertIn("coverage_only_fail_review", calibrated["calibration_rules"])
 
