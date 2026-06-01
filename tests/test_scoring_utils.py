@@ -11,6 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import numpy as np
 
 from src.api.scoring_utils import (
+    DEFAULT_ROBOFLOW_DIRTY_LABELS,
     calibrate_score,
     combine_dirty_coverage,
     merge_unet_and_sam3_masks,
@@ -64,6 +65,11 @@ def _score(detections: list[dict[str, object]]) -> dict[str, object]:
 
 
 class ScoringUtilsTests(unittest.TestCase):
+    def test_default_roboflow_dirty_labels_exclude_stained_floor(self):
+        self.assertNotIn("stained_floor", DEFAULT_ROBOFLOW_DIRTY_LABELS)
+        self.assertIn("stain", DEFAULT_ROBOFLOW_DIRTY_LABELS)
+        self.assertIn("trash", DEFAULT_ROBOFLOW_DIRTY_LABELS)
+
     def test_one_trash_detection_penalty_is_ten(self):
         scoring = _score([{"class_name": "trash"}])
 
@@ -453,6 +459,24 @@ class ScoringUtilsTests(unittest.TestCase):
         self.assertEqual(merged["raw_combined_dirty_coverage_pct"], 30.0)
         self.assertEqual(merged["combined_dirty_coverage_pct"], 3.0)
 
+    def test_reflective_unet_floor_signal_can_discount_without_aux_advisory(self):
+        unet_mask = np.zeros((10, 10), dtype=np.uint8)
+        unet_mask[7:8, :] = 1
+        unet_mask[8:10, :] = 2
+
+        merged = merge_unet_and_sam3_masks(
+            unet_mask,
+            {"_prediction_masks": []},
+            dirty_labels=("Stain",),
+            wet_labels=("Wet_Floor",),
+            env_key="LOBBY_CORRIDOR",
+        )
+
+        self.assertTrue(merged["floor_like_overmask_detected"])
+        self.assertEqual(merged["coverage_adjustment_reason"], "floor_like_overmask_discount")
+        self.assertEqual(merged["raw_combined_dirty_coverage_pct"], 30.0)
+        self.assertEqual(merged["combined_dirty_coverage_pct"], 3.0)
+
     def test_floor_like_unet_overmask_in_restroom_stays_pending_review(self):
         unet_mask = np.zeros((10, 10), dtype=np.uint8)
         unet_mask[4:10, :] = 1
@@ -526,6 +550,35 @@ class ScoringUtilsTests(unittest.TestCase):
         self.assertEqual(merged["coverage_adjustment_reason"], "")
         self.assertEqual(merged["sam3_scored_predictions_count"], 3)
         self.assertEqual(merged["combined_dirty_coverage_pct"], 72.0)
+
+    def test_single_giant_stain_on_floor_like_unet_is_advisory(self):
+        unet_mask = np.zeros((10, 10), dtype=np.uint8)
+        unet_mask[4:10, :] = 1
+        stain_mask = np.zeros((10, 10), dtype=np.uint8)
+        stain_mask[4:10, :] = 1
+
+        merged = merge_unet_and_sam3_masks(
+            unet_mask,
+            {
+                "_prediction_masks": [
+                    {
+                        "label": "Stain",
+                        "label_normalized": "stain",
+                        "mask": stain_mask,
+                        "mask_source": "polygon",
+                    }
+                ]
+            },
+            dirty_labels=("Garbage", "Stain"),
+            wet_labels=("Wet_Floor",),
+            env_key="LOBBY_CORRIDOR",
+        )
+
+        self.assertEqual(merged["sam3_scored_coverage_pct"], 0.0)
+        self.assertEqual(merged["sam3_advisory_coverage_pct"], 60.0)
+        self.assertIn("giant_stain_floor_like_advisory", merged["sam3_filter_rules"])
+        self.assertEqual(merged["coverage_adjustment_reason"], "floor_like_overmask_discount")
+        self.assertEqual(merged["combined_dirty_coverage_pct"], 6.0)
 
     def test_calibration_downgrades_high_risk_weak_pass_to_pending(self):
         calibrated = calibrate_score(

@@ -120,7 +120,7 @@ class Sam3DirtyDetectorTests(unittest.TestCase):
             roboflow_api_key="test-key",
             roboflow_workspace="workspace",
             roboflow_workflow_id="workflow",
-            roboflow_classes=("Garbage", "Stain", "Stained_Floor", "Wet_Floor"),
+            roboflow_classes=("Garbage", "Trash", "Debris", "Stain", "Wet_Floor"),
         )
         detector = Sam3DirtyDetector.__new__(Sam3DirtyDetector)
         detector.config = config
@@ -145,7 +145,12 @@ class Sam3DirtyDetectorTests(unittest.TestCase):
         self.assertEqual(result["predictions"][0]["label_normalized"], "stain")
         self.assertEqual(
             fake_client.kwargs["parameters"]["classes"],
-            "Garbage, Stain, Stained_Floor, Wet_Floor",
+            "Garbage, Trash, Debris, Stain, Wet_Floor",
+        )
+        self.assertEqual(result["requested_classes"], ["Garbage", "Trash", "Debris", "Stain", "Wet_Floor"])
+        self.assertEqual(
+            result["summary"]["requested_classes"],
+            ["Garbage", "Trash", "Debris", "Stain", "Wet_Floor"],
         )
         self.assertIn("stain", result["_label_masks"])
         self.assertEqual(result["_prediction_masks"][0]["mask_source"], "bbox_fallback")

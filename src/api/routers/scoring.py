@@ -256,7 +256,7 @@ async def evaluate_url_visualize_link(payload: EvaluateVisualizeRequest):
 @router.post("/check", tags=["production"])
 async def check_sam3(
     image: UploadFile = File(...),
-    classes: str = Form(default="Garbage, Stain, Stained_Floor, Wet_Floor"),
+    classes: str = Form(default="Garbage, Trash, Debris, Stain, Wet_Floor"),
     threshold: float = Form(default=0.3),
     resolution: int = Form(default=1008),
 ):

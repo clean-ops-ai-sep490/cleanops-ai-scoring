@@ -54,7 +54,7 @@ Cleanliness scoring được tách thành nhiều nguồn evidence thay vì ép 
 |---|---|---|
 | YOLO | Phát hiện vật thể/rác ở mức object | Bắt các vật thể rõ ràng như rác, chai, túi, giấy, debris |
 | U-Net fine-tuned | Phân đoạn vùng `dirty_area` và `wet_surface` chuyên biệt | Học pattern bẩn/ướt trong ngữ cảnh vệ sinh sàn thực tế |
-| Roboflow/SAM3-style auxiliary segmentation | Model phụ trợ tổng quát theo prompt/class như `Garbage`, `Stain`, `Stained_Floor` | Bổ sung khả năng bắt vùng bẩn tổng quát mà U-Net có thể bỏ sót |
+| Roboflow/SAM3-style auxiliary segmentation | Model phụ trợ tổng quát theo prompt/class như `Garbage`, `Trash`, `Debris`, `Stain`, `Wet_Floor` | Bổ sung khả năng bắt vùng bẩn tổng quát mà U-Net có thể bỏ sót |
 | Scoring rules | Tổng hợp evidence thành điểm và verdict | Dễ giải thích, dễ kiểm thử, dễ điều chỉnh theo môi trường |
 
 Trong API contract hiện tại, block phụ trợ vẫn giữ tên `sam3` để tương thích với backend và benchmark scripts. Về mặt kiến trúc báo cáo, có thể giải thích `sam3` là lớp auxiliary foundation segmentation; provider cụ thể có thể là SAM3 local hoặc Roboflow Workflow. Với máy local hiện tại, Roboflow là hướng nhẹ hơn vì không cần GPU CUDA 12.8.
@@ -150,7 +150,7 @@ Hướng thay thế nhẹ hơn là dùng Roboflow Workflow như provider externa
 
 Roboflow/SAM3-style segmentation không thay thế U-Net tự train. Vai trò của nó là lớp phụ trợ tổng quát:
 
-- Nhận prompt/class như `Garbage`, `Stain`, `Stained_Floor`.
+- Nhận prompt/class như `Garbage`, `Trash`, `Debris`, `Stain`, `Wet_Floor`.
 - Sinh vùng nghi ngờ bẩn ở mức mask/bbox/polygon tùy workflow.
 - Bổ sung evidence khi U-Net bỏ sót vùng bẩn có hình dạng lạ hoặc không giống dữ liệu train.
 - Giúp giảm false-pass nếu model phụ trợ phát hiện được vùng bẩn thật.

@@ -346,6 +346,7 @@ class Sam3DirtyDetector:
             "roboflow_workspace": self.config.roboflow_workspace,
             "roboflow_workflow_id": self.config.roboflow_workflow_id,
             "roboflow_classes": list(self.config.roboflow_classes),
+            "roboflow_requested_classes": list(self.config.roboflow_classes),
         }
 
     def detect(
@@ -611,13 +612,15 @@ class Sam3DirtyDetector:
                 "status": "ok",
                 "provider": "roboflow",
                 "prompts": workflow_prompts,
+                "requested_classes": workflow_prompts,
                 "predictions": predictions,
                 "regions": regions,
                 "summary": {
                     "input_size": [width, height],
                     "resolution": self.config.resolution,
                     "confidence_threshold": threshold_value,
-                    "prompts_count": len(prompts),
+                    "prompts_count": len(workflow_prompts),
+                    "requested_classes": workflow_prompts,
                     "predictions_count": len(predictions),
                     "union_mask_area_px": union_area_px,
                     "dirty_coverage_pct": round((union_area_px / max(1, width * height)) * 100.0, 3),

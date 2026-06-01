@@ -30,7 +30,6 @@ DEFAULT_SCORING_PENALTY_LABELS = (
 DEFAULT_ROBOFLOW_DIRTY_LABELS = (
     "garbage",
     "stain",
-    "stained_floor",
     "dirty_area",
     "marks",
     "trash",
@@ -253,6 +252,19 @@ def merge_unet_and_sam3_masks(
     unet_wet_pct = (unet_wet_px / total_px) * 100.0
     env_normalized = str(env_key or "").strip().upper()
     high_risk_envs = HIGH_RISK_REVIEW_ENVS
+    aux_guard_component_summary = _unet_component_summary((unet_dirty | unet_wet).astype(np.uint8))
+    aux_guard_largest_component_pct = _as_float(aux_guard_component_summary["unet_largest_component_area_pct"])
+    aux_guard_component_count = _as_int(aux_guard_component_summary["unet_component_count"])
+    aux_guard_largest_ratio = aux_guard_largest_component_pct / max(0.001, unet_pct)
+    aux_guard_bottom_touch = bool(aux_guard_component_summary["unet_largest_component_bottom_touch"])
+    aux_guard_bottom_area_ratio = _as_float(aux_guard_component_summary["unet_largest_component_bottom_area_ratio"])
+    unet_floor_like_for_aux_guard = (
+        unet_pct >= 18.0
+        and aux_guard_component_count <= 4
+        and aux_guard_largest_component_pct >= 15.0
+        and aux_guard_largest_ratio >= 0.70
+        and (aux_guard_bottom_touch or aux_guard_bottom_area_ratio >= 0.40)
+    )
 
     scored_dirty_mask = np.zeros_like(merged, dtype=bool)
     scored_wet_mask = np.zeros_like(merged, dtype=bool)
@@ -327,6 +339,12 @@ def merge_unet_and_sam3_masks(
         is_large_bbox_fallback = mask_source == "bbox_fallback" and area_pct >= 15.0
         is_single_giant_aux = total_aux_predictions <= 1 and area_pct >= 35.0 and unet_pct < 5.0
         is_moderate_stain = area_pct <= 30.0
+        is_giant_stain_floor_like = (
+            label == "stain"
+            and area_pct >= 35.0
+            and total_aux_predictions <= 1
+            and unet_floor_like_for_aux_guard
+        )
         is_multi_region_dirty = total_aux_predictions >= 3
 
         if is_large_bbox_fallback:
@@ -334,6 +352,13 @@ def merge_unet_and_sam3_masks(
             advisory_predictions_count += 1
             label_bucket["advisory_area_pct"] = round(float(label_bucket["advisory_area_pct"]) + area_pct, 3)
             filter_rules.append("large_bbox_fallback_advisory")
+            continue
+
+        if is_giant_stain_floor_like:
+            advisory_mask |= mask
+            advisory_predictions_count += 1
+            label_bucket["advisory_area_pct"] = round(float(label_bucket["advisory_area_pct"]) + area_pct, 3)
+            filter_rules.append("giant_stain_floor_like_advisory")
             continue
 
         if is_single_giant_aux and not is_strong_label:
@@ -383,6 +408,7 @@ def merge_unet_and_sam3_masks(
     sam3_advisory_pct = (advisory_px / total_px) * 100.0
     has_strong_scored_aux = sam3_scored_pct >= 5.0 or scored_predictions_count >= 3
     has_aux_floor_advisory = sam3_advisory_pct >= 20.0 or advisory_predictions_count > 0
+    has_reflective_unet_floor_signal = unet_wet_pct >= 5.0 and unet_dirty_pct >= 8.0
     wet_signal_is_floor_like = unet_wet_pct < 5.0 or (has_aux_floor_advisory and unet_dirty_pct >= 8.0)
     component_shape_is_floor_like = component_count <= 3 or (has_aux_floor_advisory and component_count <= 4)
     spatial_shape_is_floor_like = (
@@ -393,8 +419,12 @@ def merge_unet_and_sam3_masks(
 
     looks_floor_like = (
         unet_pct >= 18.0
-        and (unet_dirty_pct >= 12.0 or (has_aux_floor_advisory and unet_dirty_pct >= 8.0))
-        and wet_signal_is_floor_like
+        and (
+            unet_dirty_pct >= 12.0
+            or (has_aux_floor_advisory and unet_dirty_pct >= 8.0)
+            or has_reflective_unet_floor_signal
+        )
+        and (wet_signal_is_floor_like or has_reflective_unet_floor_signal)
         and component_shape_is_floor_like
         and largest_component_area_pct >= 15.0
         and largest_ratio >= 0.70
@@ -404,7 +434,7 @@ def merge_unet_and_sam3_masks(
     if looks_floor_like and not has_strong_scored_aux:
         floor_like_overmask_detected = True
         if env_normalized in FLOOR_LIKE_DISCOUNT_ENVS:
-            if raw_combined_pct <= 25.0 or has_aux_floor_advisory:
+            if raw_combined_pct <= 25.0 or has_aux_floor_advisory or has_reflective_unet_floor_signal:
                 adjustment_factor = 0.10
                 adjustment_reason = "floor_like_overmask_discount"
                 adjusted_unet_pct = unet_pct * adjustment_factor

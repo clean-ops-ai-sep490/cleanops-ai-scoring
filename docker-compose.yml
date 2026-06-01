@@ -33,8 +33,8 @@ services:
       - ROBOFLOW_API_KEY=${ROBOFLOW_API_KEY:-}
       - ROBOFLOW_WORKSPACE=${ROBOFLOW_WORKSPACE:-nams-workspace-fykkb}
       - ROBOFLOW_WORKFLOW_ID=${ROBOFLOW_WORKFLOW_ID:-general-segmentation-api-14}
-      - ROBOFLOW_CLASSES=${ROBOFLOW_CLASSES:-Garbage, Stain, Stained_Floor, Wet_Floor}
-      - ROBOFLOW_DIRTY_LABELS=${ROBOFLOW_DIRTY_LABELS:-Garbage, Stain, Stained_Floor, dirty_area, marks, trash, debris}
+      - ROBOFLOW_CLASSES=${ROBOFLOW_CLASSES:-Garbage, Trash, Debris, Stain, Wet_Floor}
+      - ROBOFLOW_DIRTY_LABELS=${ROBOFLOW_DIRTY_LABELS:-Garbage, Stain, dirty_area, marks, trash, debris}
       - ROBOFLOW_WET_LABELS=${ROBOFLOW_WET_LABELS:-Wet_Floor, wet_surface, water, spill, puddle}
       - ROBOFLOW_USE_CACHE=${ROBOFLOW_USE_CACHE:-true}
       - SAM3_CHECKPOINT_PATH=${SAM3_CHECKPOINT_PATH:-/app/model-cache/sam3/sam3.pt}

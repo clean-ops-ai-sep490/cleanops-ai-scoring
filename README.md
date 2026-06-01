@@ -200,7 +200,7 @@ ROBOFLOW_API_URL=https://serverless.roboflow.com
 ROBOFLOW_API_KEY=<your_roboflow_key>
 ROBOFLOW_WORKSPACE=nams-workspace-fykkb
 ROBOFLOW_WORKFLOW_ID=general-segmentation-api-14
-ROBOFLOW_CLASSES=Garbage, Stain, Stained_Floor
+ROBOFLOW_CLASSES=Garbage, Trash, Debris, Stain, Wet_Floor
 ```
 
 Local SAM3 remains a compatibility path, but the current host smoke test was blocked by CUDA 12.8 image requirements while the driver reports CUDA 12.3. Do not use local SAM3 as a quantitative demo claim until that runtime is fixed and benchmarked.

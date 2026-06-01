@@ -463,10 +463,10 @@ def _build_settings() -> Settings:
         roboflow_api_key=os.getenv("ROBOFLOW_API_KEY"),
         roboflow_workspace=os.getenv("ROBOFLOW_WORKSPACE", "nams-workspace-fykkb").strip(),
         roboflow_workflow_id=os.getenv("ROBOFLOW_WORKFLOW_ID", "general-segmentation-api-14").strip(),
-        roboflow_classes=_as_str_tuple("ROBOFLOW_CLASSES", ("Garbage", "Stain", "Stained_Floor", "Wet_Floor")),
+        roboflow_classes=_as_str_tuple("ROBOFLOW_CLASSES", ("Garbage", "Trash", "Debris", "Stain", "Wet_Floor")),
         roboflow_dirty_labels=_as_str_tuple(
             "ROBOFLOW_DIRTY_LABELS",
-            ("Garbage", "Stain", "Stained_Floor", "dirty_area", "marks", "trash", "debris"),
+            ("Garbage", "Stain", "dirty_area", "marks", "trash", "debris"),
         ),
         roboflow_wet_labels=_as_str_tuple(
             "ROBOFLOW_WET_LABELS",

@@ -8,7 +8,7 @@ CleanOps AI scoring đánh giá ảnh sau vệ sinh để hỗ trợ supervisor 
 
 Luồng cleanliness scoring gồm:
 
-- Auxiliary foundation segmentation: dùng Roboflow/SAM3-style prompt hoặc class như `Garbage`, `Stain`, `Stained_Floor` để tạo evidence nền cho vùng nghi ngờ bẩn. Response contract hiện vẫn giữ key `sam3` để tương thích backend.
+- Auxiliary foundation segmentation: dùng Roboflow/SAM3-style prompt hoặc class như `Garbage`, `Trash`, `Debris`, `Stain`, `Wet_Floor` để tạo evidence nền cho vùng nghi ngờ bẩn. Response contract hiện vẫn giữ key `sam3` để tương thích backend.
 - YOLO detector: phát hiện vật thể hoặc vùng bất thường ở mức object/region. Trong scope rebuild này, YOLO được giữ cố định và không retrain.
 - U-Net segmentation: ước lượng vùng `stain_or_water` và `wet_surface`, từ đó tính dirty coverage.
 - Scoring rules: dùng `max(auxiliary coverage, U-Net coverage)`, object evidence và threshold theo environment để tạo `quality_score` và verdict `PASS/PENDING/FAIL`.
