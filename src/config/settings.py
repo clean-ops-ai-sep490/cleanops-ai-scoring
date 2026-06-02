@@ -203,6 +203,7 @@ class Settings:
     app_port: int
     app_reload: bool
     request_timeout_sec: int
+    inference_deadline_sec: float
     app_public_base_url: str
 
     base_output_dir: Path
@@ -254,6 +255,8 @@ class Settings:
     sam3_device: str
     sam3_use_bfloat16: bool
     sam3_provider: str
+    sam3_timeout_fallback_enabled: bool
+    sam3_min_timeout_sec: float
     roboflow_api_url: str
     roboflow_api_key: Optional[str]
     roboflow_workspace: str
@@ -369,6 +372,7 @@ def _build_settings() -> Settings:
         app_port=_as_int("APP_PORT", 8000),
         app_reload=_as_bool("APP_RELOAD", True),
         request_timeout_sec=_as_int("REQUEST_TIMEOUT_SEC", 30),
+        inference_deadline_sec=max(0.0, _as_float("INFERENCE_DEADLINE_SEC", 30.0)),
         app_public_base_url=os.getenv("APP_PUBLIC_BASE_URL", "").strip(),
         base_output_dir=base_output_dir,
         model_cache_dir=model_cache_dir,
@@ -459,6 +463,8 @@ def _build_settings() -> Settings:
         sam3_device=os.getenv("SAM3_DEVICE", "cpu").strip() or "cpu",
         sam3_use_bfloat16=_as_bool("SAM3_USE_BFLOAT16", True),
         sam3_provider=os.getenv("SAM3_PROVIDER", "roboflow").strip().lower() or "roboflow",
+        sam3_timeout_fallback_enabled=_as_bool("SAM3_TIMEOUT_FALLBACK_ENABLED", True),
+        sam3_min_timeout_sec=max(0.0, _as_float("SAM3_MIN_TIMEOUT_SEC", 1.0)),
         roboflow_api_url=os.getenv("ROBOFLOW_API_URL", "https://serverless.roboflow.com").strip(),
         roboflow_api_key=os.getenv("ROBOFLOW_API_KEY"),
         roboflow_workspace=os.getenv("ROBOFLOW_WORKSPACE", "nams-workspace-fykkb").strip(),

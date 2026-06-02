@@ -636,6 +636,28 @@ class Sam3DirtyDetector:
             self._logger.exception("Roboflow SAM3-compatible inference failed.")
             return self._empty_result(prompts, width, height, "error", started_at, error=self._last_error)
 
+    def empty_result(
+        self,
+        image: Image.Image,
+        *,
+        prompts: str | Iterable[str] | None = None,
+        status: str = "skipped",
+        started_at: float | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        parsed_prompts = parse_prompt_list(prompts, self.config.default_prompts, self.config.max_prompts)
+        width, height = image.size
+        result = self._empty_result(
+            parsed_prompts,
+            width,
+            height,
+            status,
+            time.perf_counter() if started_at is None else started_at,
+            error=error,
+        )
+        result["skipped"] = True
+        return result
+
     def _empty_result(
         self,
         prompts: list[str],

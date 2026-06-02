@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import time
 from typing import List
 
 import numpy as np
@@ -61,6 +62,7 @@ async def evaluate_batch(
     semaphore = asyncio.Semaphore(max(1, app_state.settings.inference_batch_concurrency))
 
     async def process_upload(seq: int, upload: UploadFile):
+        request_started_at = time.perf_counter()
         try:
             content = await upload.read()
             if not content:
@@ -72,6 +74,7 @@ async def evaluate_batch(
                     img,
                     env_key,
                     source=f"/evaluate-batch:upload:{upload.filename or seq}",
+                    request_started_at=request_started_at,
                 )
             return {
                 "ok": True,
@@ -87,6 +90,7 @@ async def evaluate_batch(
             return {"ok": False}
 
     async def process_url(seq: int, url: str):
+        request_started_at = time.perf_counter()
         try:
             async with semaphore:
                 img = await asyncio.to_thread(_load_image_from_url, url)
@@ -95,6 +99,7 @@ async def evaluate_batch(
                     img,
                     env_key,
                     source=f"/evaluate-batch:url:{url}",
+                    request_started_at=request_started_at,
                 )
             return {
                 "ok": True,
@@ -171,6 +176,7 @@ async def evaluate_visualize_link(
         return JSONResponse(status_code=400, content={"error": str(exc)})
 
     try:
+        request_started_at = time.perf_counter()
         content = await file.read()
         if not content:
             return JSONResponse(status_code=400, content={"error": "File ảnh rỗng."})
@@ -181,6 +187,7 @@ async def evaluate_visualize_link(
                 img,
                 env_key,
                 source=f"/evaluate-visualize-link:{file.filename or 'upload'}",
+                request_started_at=request_started_at,
             )
         )
         rendered = app_state.render_hybrid_overlay(
@@ -219,12 +226,14 @@ async def evaluate_url_visualize_link(payload: EvaluateVisualizeRequest):
         return JSONResponse(status_code=400, content={"error": str(exc)})
 
     try:
+        request_started_at = time.perf_counter()
         img = _load_image_from_url(payload.url)
         yolo_result, unet_result, scoring, dirty_region_candidates, visual_review, sam3_result = (
             app_state.evaluate_image_with_visual_review(
                 img,
                 env_key,
                 source=f"/evaluate-url-visualize-link:{payload.url}",
+                request_started_at=request_started_at,
             )
         )
         rendered = app_state.render_hybrid_overlay(

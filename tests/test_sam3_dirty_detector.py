@@ -88,6 +88,28 @@ class Sam3DirtyDetectorTests(unittest.TestCase):
 
         self.assertEqual(public, {"predictions": []})
 
+    def test_empty_result_supports_timeout_fallback_payload(self):
+        detector = Sam3DirtyDetector.__new__(Sam3DirtyDetector)
+        detector.config = _config()
+        detector._loaded = True
+        detector._last_error = None
+
+        result = detector.empty_result(
+            Image.new("RGB", (4, 3), color=(200, 200, 200)),
+            prompts="Trash",
+            status="timeout",
+            started_at=0.0,
+            error="sam3_timeout_after_30s",
+        )
+        public = public_sam3_payload(result)
+
+        self.assertEqual(public["status"], "timeout")
+        self.assertTrue(public["skipped"])
+        self.assertEqual(public["error"], "sam3_timeout_after_30s")
+        self.assertEqual(public["summary"]["input_size"], [4, 3])
+        self.assertEqual(public["summary"]["predictions_count"], 0)
+        self.assertNotIn("_mask_union", public)
+
     def test_roboflow_provider_maps_predictions_to_sam3_payload(self):
         class FakeRoboflowClient:
             def run_workflow(self, **kwargs):

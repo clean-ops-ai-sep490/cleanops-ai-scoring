@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import concurrent.futures
 import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -56,6 +58,9 @@ SCORING_OBJECT_PENALTY_PER_DETECTION = max(0.0, settings.scoring_object_penalty_
 SCORING_CALIBRATION_ENABLED = settings.scoring_calibration_enabled
 YOLO_CONF = settings.yolo_conf
 REQUEST_TIMEOUT_SEC = settings.request_timeout_sec
+INFERENCE_DEADLINE_SEC = max(0.0, settings.inference_deadline_sec)
+SAM3_TIMEOUT_FALLBACK_ENABLED = settings.sam3_timeout_fallback_enabled
+SAM3_MIN_TIMEOUT_SEC = max(0.0, settings.sam3_min_timeout_sec)
 VISUALIZE_JPEG_QUALITY = max(20, min(100, settings.visualize_jpeg_quality))
 APP_PUBLIC_BASE_URL = settings.app_public_base_url
 VISUALIZE_TEMP_URL_TTL_SEC = max(30, settings.visualize_temp_url_ttl_sec)
@@ -104,6 +109,10 @@ SAM3_DETECTOR = Sam3DirtyDetector(
         roboflow_use_cache=settings.roboflow_use_cache,
     ),
     logger,
+)
+SAM3_TIMEOUT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=max(1, settings.inference_batch_concurrency),
+    thread_name_prefix="sam3-timeout",
 )
 
 
@@ -299,6 +308,9 @@ def build_health_payload() -> Dict[str, Any]:
         "model_storage_container": MODEL_STORAGE.container,
         "model_require_blob": MODEL_REQUIRE_BLOB,
         "max_batch_images": MAX_BATCH_IMAGES,
+        "inference_deadline_sec": INFERENCE_DEADLINE_SEC,
+        "sam3_timeout_fallback_enabled": SAM3_TIMEOUT_FALLBACK_ENABLED,
+        "sam3_min_timeout_sec": SAM3_MIN_TIMEOUT_SEC,
         "pending_lower_bound": PENDING_LOWER_BOUND,
         "scoring_penalty_labels": list(SCORING_PENALTY_LABELS),
         "scoring_object_penalty_per_detection": SCORING_OBJECT_PENALTY_PER_DETECTION,
@@ -349,6 +361,66 @@ def detect_dirty_with_sam3(
     return SAM3_DETECTOR.detect(img, prompts=prompts, threshold=threshold)
 
 
+def _sam3_empty_result(
+    img: Image.Image,
+    *,
+    prompts: str | List[str] | None,
+    status: str,
+    started_at: float,
+    error: str,
+) -> Dict[str, Any]:
+    result = SAM3_DETECTOR.empty_result(img, prompts=prompts, status=status, started_at=started_at, error=error)
+    if settings.sam3_provider == "roboflow":
+        requested_classes = list(settings.roboflow_classes)
+        result["prompts"] = requested_classes
+        result["requested_classes"] = requested_classes
+        result["summary"]["prompts_count"] = len(requested_classes)
+        result["summary"]["requested_classes"] = requested_classes
+    return result
+
+
+def _detect_dirty_with_sam3_deadline(
+    img: Image.Image,
+    *,
+    prompts: str | List[str] | None = None,
+    threshold: float | None = None,
+    request_started_at: float | None = None,
+) -> Dict[str, Any]:
+    if not SAM3_TIMEOUT_FALLBACK_ENABLED or INFERENCE_DEADLINE_SEC <= 0.0:
+        return detect_dirty_with_sam3(img, prompts=prompts, threshold=threshold)
+
+    started_at = time.perf_counter() if request_started_at is None else request_started_at
+    sam3_started_at = time.perf_counter()
+    remaining_budget = INFERENCE_DEADLINE_SEC - (sam3_started_at - started_at)
+    if remaining_budget < SAM3_MIN_TIMEOUT_SEC:
+        logger.warning(
+            "Skip SAM3/Roboflow because request deadline budget is too small. remaining=%.3fs min=%.3fs",
+            remaining_budget,
+            SAM3_MIN_TIMEOUT_SEC,
+        )
+        return _sam3_empty_result(
+            img,
+            prompts=prompts,
+            status="skipped_deadline",
+            started_at=sam3_started_at,
+            error=f"sam3_skipped_deadline_after_{INFERENCE_DEADLINE_SEC:g}s",
+        )
+
+    future = SAM3_TIMEOUT_EXECUTOR.submit(detect_dirty_with_sam3, img, prompts=prompts, threshold=threshold)
+    try:
+        return future.result(timeout=max(0.001, remaining_budget))
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        logger.warning("SAM3/Roboflow timed out after %.3fs; falling back to YOLO+U-Net.", remaining_budget)
+        return _sam3_empty_result(
+            img,
+            prompts=prompts,
+            status="timeout",
+            started_at=sam3_started_at,
+            error=f"sam3_timeout_after_{INFERENCE_DEADLINE_SEC:g}s",
+        )
+
+
 def public_sam3_result(result: Dict[str, Any]) -> Dict[str, Any]:
     return public_sam3_payload(result)
 
@@ -385,7 +457,11 @@ def evaluate_image_with_artifacts(
     *,
     source: str = "hybrid",
     visualize_enhanced: bool = False,
+    request_started_at: float | None = None,
 ):
+    if request_started_at is None:
+        request_started_at = time.perf_counter()
+
     raw_yolo_result, raw_unet_result, baseline_scoring = evaluate_image_with_artifacts_impl(
         img,
         env_key,
@@ -401,7 +477,11 @@ def evaluate_image_with_artifacts(
         scoring_object_penalty_per_detection=SCORING_OBJECT_PENALTY_PER_DETECTION,
     )
     sam3_prompts = None if settings.sam3_provider == "roboflow" else settings.sam3_prompts
-    sam3_result = detect_dirty_with_sam3(img, prompts=sam3_prompts)
+    sam3_result = _detect_dirty_with_sam3_deadline(
+        img,
+        prompts=sam3_prompts,
+        request_started_at=request_started_at,
+    )
     coverage_summary = merge_unet_and_sam3_masks_impl(
         raw_unet_result["mask_original_size"],
         sam3_result,
@@ -445,6 +525,10 @@ def evaluate_image_with_artifacts(
     recomputed_scoring["sam3_predictions_count"] = int(
         sam3_result.get("summary", {}).get("predictions_count", 0) or 0
     )
+    sam3_status = str(sam3_result.get("status", "")).strip().lower()
+    recomputed_scoring["sam3_status"] = sam3_status
+    recomputed_scoring["sam3_timeout"] = sam3_status == "timeout"
+    recomputed_scoring["sam3_fallback_used"] = sam3_status in {"timeout", "skipped_deadline"}
     recomputed_scoring = calibrate_score_impl(
         recomputed_scoring,
         env_key=env_key,
@@ -476,8 +560,14 @@ def evaluate_image(
     env_key: str,
     *,
     source: str = "hybrid",
+    request_started_at: float | None = None,
 ) -> Dict[str, Any]:
-    yolo_result, unet_result, score, _, _, sam3_result = evaluate_image_with_artifacts(img, env_key, source=source)
+    yolo_result, unet_result, score, _, _, sam3_result = evaluate_image_with_artifacts(
+        img,
+        env_key,
+        source=source,
+        request_started_at=request_started_at,
+    )
     return {
         "yolo": yolo_result,
         "unet": unet_result["summary"],
@@ -491,12 +581,14 @@ def evaluate_image_with_visual_review(
     env_key: str,
     *,
     source: str = "hybrid-visual",
+    request_started_at: float | None = None,
 ):
     return evaluate_image_with_artifacts(
         img,
         env_key,
         source=source,
         visualize_enhanced=True,
+        request_started_at=request_started_at,
     )
 
 

@@ -312,6 +312,8 @@ def render_hybrid_overlay(
     if not compact_mode:
         optional_lines.append(f"OBJECT PENALTY: {float(scoring.get('object_penalty', 0.0)):.2f}")
         optional_lines.append(f"ENV: {env_key}")
+        if bool(scoring.get("sam3_fallback_used")):
+            optional_lines.append("SAM3: TIMEOUT FALLBACK")
     if (highlight_region_ids or advisory_object_boxes or advisory_dirty_boxes) and not compact_mode:
         optional_lines.append("AI REVIEWED OVERLAY")
     overlay_summary = str(visual_review.get("overlay_summary", "")).strip()
