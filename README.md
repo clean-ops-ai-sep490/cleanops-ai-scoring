@@ -289,12 +289,44 @@ Scoring API da co them endpoint retrain de backend poll theo job:
 - POST /retrain/jobs
 - GET /retrain/jobs/{jobId}
 
+### Env deploy API + trainer
+
+Khong can dua toan bo `.env` local len production. Dung hai template nho hon:
+
+- `.env.api.example`: env cho `cleanops-ai-scoring-api`, gom inference, visualization, PPE va retrain bridge.
+- `.env.trainer.example`: env cho trainer chay tren may host bang Python venv + ngrok, gom dataset build, train candidate va upload artifact.
+
+Flow khuyen nghi hien tai: scoring API chay Docker, trainer chay tren may co venv/GPU/local resource va expose bang ngrok.
+
+Tren may trainer:
+
+```powershell
+Copy-Item .env.trainer.example .env.trainer.local
+.\.venv\Scripts\python.exe -m uvicorn src.trainer_api:app --host 0.0.0.0 --port 8001 --env-file .env.trainer.local
+ngrok http 8001
+```
+
+Tren env cua scoring API, dat:
+
+```powershell
+RETRAIN_TRAINER_BASE_URL=https://<your-ngrok-domain>
+```
+
+Docker trainer profile van ton tai de test/dev, nhung khong phai duong deploy mac dinh neu may deploy khong du tai nguyen train.
+
+Flow production retrain:
+
+1. Backend/admin UI goi `POST /retrain/jobs` tren scoring API.
+2. Scoring API goi trainer local/hosted qua `{RETRAIN_TRAINER_BASE_URL}/trainer/jobs`.
+3. Trainer chay `python scripts/run_retrain_pipeline.py`.
+4. Candidate artifacts duoc upload len Blob tai `RETRAIN_CONTAINER/RETRAIN_EXTERNAL_PREFIX`.
+
 Bien moi truong lien quan trong service `cleanops-ai-scoring-api`:
 
 - RETRAIN_API_ENABLED=true
 - RETRAIN_API_KEY= (optional, backend gui qua header X-Retrain-Api-Key)
 - RETRAIN_USE_REMOTE_TRAINER=true
-- RETRAIN_TRAINER_BASE_URL=https://<your-ngrok-domain>
+- RETRAIN_TRAINER_BASE_URL=https://<your-ngrok-domain> (hoac URL hosted trainer)
 - RETRAIN_TRAINER_SUBMIT_PATH=/trainer/jobs
 - RETRAIN_TRAINER_API_KEY= (optional, API gui qua header X-Trainer-Api-Key)
 - RETRAIN_TRAINER_TIMEOUT_SEC=7200

@@ -326,7 +326,99 @@ class ScoringUtilsTests(unittest.TestCase):
         self.assertEqual(merged["sam3_scored_predictions_count"], 3)
         self.assertEqual(merged["sam3_scored_coverage_pct"], 12.0)
         self.assertEqual(merged["combined_dirty_coverage_pct"], 12.0)
+        self.assertEqual(merged["sam3_penalty_detections_count"], 0)
         self.assertIn("aux_prediction_scored", merged["sam3_filter_rules"])
+
+    def test_sam3_trash_predictions_count_as_object_penalty(self):
+        unet_mask = np.zeros((10, 10), dtype=np.uint8)
+        trash_a = np.zeros((10, 10), dtype=np.uint8)
+        trash_a[0:2, 0:2] = 1
+        trash_b = np.zeros((10, 10), dtype=np.uint8)
+        trash_b[3:5, 7:9] = 1
+
+        merged = merge_unet_and_sam3_masks(
+            unet_mask,
+            {
+                "_prediction_masks": [
+                    {"label": "Trash", "label_normalized": "trash", "mask": trash_a, "mask_source": "polygon"},
+                    {"label": "Trash", "label_normalized": "trash", "mask": trash_b, "mask_source": "polygon"},
+                ]
+            },
+            dirty_labels=("Trash", "Stain"),
+            wet_labels=("Wet_Floor",),
+            env_key="LOBBY_CORRIDOR",
+        )
+        yolo_penalty = summarize_penalty_detections([], PENALTY_LABELS)
+        penalty_count = int(yolo_penalty["penalty_detections_count"]) + int(
+            merged["sam3_penalty_detections_count"]
+        )
+        scoring = score_image(
+            total_dirty_coverage_pct=merged["combined_dirty_coverage_pct"],
+            detections_count=0,
+            env_key="LOBBY_CORRIDOR",
+            env_rules=ENV_RULES,
+            pending_lower_bound=50.0,
+            penalty_detections_count=penalty_count,
+            object_penalty_per_detection=10.0,
+            penalty_detection_labels=sorted(
+                set(yolo_penalty["penalty_detection_labels"] + merged["sam3_penalty_detection_labels"])
+            ),
+        )
+
+        self.assertEqual(merged["sam3_scored_predictions_count"], 2)
+        self.assertEqual(merged["sam3_penalty_detections_count"], 2)
+        self.assertEqual(merged["sam3_penalty_detection_labels"], ["trash"])
+        self.assertEqual(merged["sam3_penalty_detection_indexes"], [0, 1])
+        self.assertEqual(scoring["penalty_detections_count"], 2)
+        self.assertEqual(scoring["object_penalty"], 20.0)
+        self.assertEqual(scoring["quality_score"], 72.0)
+        self.assertEqual(scoring["verdict"], "PENDING")
+        self.assertIn("trash-like objects remain", scoring["reasons"])
+
+    def test_yolo_and_sam3_penalty_counts_are_additive_and_capped(self):
+        unet_mask = np.zeros((10, 10), dtype=np.uint8)
+        masks = []
+        for col in (0, 3, 6):
+            mask = np.zeros((10, 10), dtype=np.uint8)
+            mask[0:2, col : col + 2] = 1
+            masks.append(mask)
+
+        merged = merge_unet_and_sam3_masks(
+            unet_mask,
+            {
+                "_prediction_masks": [
+                    {"label": "Garbage", "label_normalized": "garbage", "mask": mask, "mask_source": "polygon"}
+                    for mask in masks
+                ]
+            },
+            dirty_labels=("Garbage",),
+            wet_labels=("Wet_Floor",),
+            env_key="LOBBY_CORRIDOR",
+        )
+        yolo_penalty = summarize_penalty_detections(
+            [{"class_name": "trash"}, {"class_name": "bottle"}],
+            PENALTY_LABELS,
+        )
+        penalty_count = int(yolo_penalty["penalty_detections_count"]) + int(
+            merged["sam3_penalty_detections_count"]
+        )
+
+        scoring = score_image(
+            total_dirty_coverage_pct=merged["combined_dirty_coverage_pct"],
+            detections_count=2,
+            env_key="LOBBY_CORRIDOR",
+            env_rules=ENV_RULES,
+            pending_lower_bound=50.0,
+            penalty_detections_count=penalty_count,
+            object_penalty_per_detection=10.0,
+            penalty_detection_labels=sorted(
+                set(yolo_penalty["penalty_detection_labels"] + merged["sam3_penalty_detection_labels"])
+            ),
+        )
+
+        self.assertEqual(merged["sam3_penalty_detections_count"], 3)
+        self.assertEqual(scoring["penalty_detections_count"], 5)
+        self.assertEqual(scoring["object_penalty"], 40.0)
 
     def test_floor_like_unet_overmask_is_discounted_in_normal_env(self):
         unet_mask = np.zeros((10, 10), dtype=np.uint8)
@@ -576,6 +668,7 @@ class ScoringUtilsTests(unittest.TestCase):
 
         self.assertEqual(merged["sam3_scored_coverage_pct"], 0.0)
         self.assertEqual(merged["sam3_advisory_coverage_pct"], 60.0)
+        self.assertEqual(merged["sam3_penalty_detections_count"], 0)
         self.assertIn("giant_stain_floor_like_advisory", merged["sam3_filter_rules"])
         self.assertEqual(merged["coverage_adjustment_reason"], "floor_like_overmask_discount")
         self.assertEqual(merged["combined_dirty_coverage_pct"], 6.0)

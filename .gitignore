@@ -66,6 +66,9 @@ scripts/run_scoring_pilot_visual_benchmark.py
 .env
 .env.*
 !.env.example
+!.env.api.example
+!.env.trainer.example
+!.env.training.example
 /.azure-cli/
 *.etag
 kaggle.json

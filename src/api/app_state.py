@@ -410,10 +410,22 @@ def evaluate_image_with_artifacts(
         env_key=env_key,
     )
     merged_mask = coverage_summary.pop("merged_mask")
-    penalty_summary = summarize_penalty_detections_impl(
+    yolo_penalty_summary = summarize_penalty_detections_impl(
         raw_yolo_result.get("results", []),
         SCORING_PENALTY_LABELS,
     )
+    yolo_penalty_count = int(yolo_penalty_summary.get("penalty_detections_count", 0) or 0)
+    sam3_penalty_count = int(coverage_summary.get("sam3_penalty_detections_count", 0) or 0)
+    yolo_penalty_labels = list(yolo_penalty_summary.get("penalty_detection_labels", []) or [])
+    sam3_penalty_labels = list(coverage_summary.get("sam3_penalty_detection_labels", []) or [])
+    yolo_penalty_indexes = list(yolo_penalty_summary.get("penalty_detection_indexes", []) or [])
+    sam3_penalty_indexes = list(coverage_summary.get("sam3_penalty_detection_indexes", []) or [])
+    penalty_summary = {
+        **yolo_penalty_summary,
+        "penalty_detections_count": yolo_penalty_count + sam3_penalty_count,
+        "penalty_detection_labels": sorted(set(yolo_penalty_labels + sam3_penalty_labels)),
+        "penalty_detection_indexes": yolo_penalty_indexes + sam3_penalty_indexes,
+    }
     recomputed_scoring = score_image_impl(
         total_dirty_coverage_pct=coverage_summary["combined_dirty_coverage_pct"],
         detections_count=raw_yolo_result["detections_count"],
@@ -423,6 +435,12 @@ def evaluate_image_with_artifacts(
         object_penalty_per_detection=SCORING_OBJECT_PENALTY_PER_DETECTION,
         **penalty_summary,
     )
+    recomputed_scoring["yolo_penalty_detections_count"] = yolo_penalty_count
+    recomputed_scoring["sam3_penalty_detections_count"] = sam3_penalty_count
+    recomputed_scoring["penalty_detection_source_counts"] = {
+        "yolo": yolo_penalty_count,
+        "sam3": sam3_penalty_count,
+    }
     recomputed_scoring.update(coverage_summary)
     recomputed_scoring["sam3_predictions_count"] = int(
         sam3_result.get("summary", {}).get("predictions_count", 0) or 0

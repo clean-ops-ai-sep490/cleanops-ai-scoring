@@ -276,6 +276,8 @@ def merge_unet_and_sam3_masks(
     scored_predictions_count = 0
     advisory_predictions_count = 0
     rejected_predictions_count = 0
+    sam3_penalty_detection_labels: list[str] = []
+    sam3_penalty_detection_indexes: list[int] = []
 
     prediction_masks = sam3_result.get("_prediction_masks") if isinstance(sam3_result, dict) else []
     prediction_items: list[dict[str, Any]] = []
@@ -299,7 +301,7 @@ def merge_unet_and_sam3_masks(
 
     total_aux_predictions = len(prediction_items)
 
-    for item in prediction_items:
+    for prediction_idx, item in enumerate(prediction_items):
         raw_mask = item.get("mask")
         if not isinstance(raw_mask, np.ndarray):
             continue
@@ -374,6 +376,9 @@ def merge_unet_and_sam3_masks(
         if is_strong_label or is_moderate_stain or is_multi_region_dirty:
             scored_dirty_mask |= mask
             scored_predictions_count += 1
+            if is_strong_label:
+                sam3_penalty_detection_labels.append(label)
+                sam3_penalty_detection_indexes.append(prediction_idx)
             label_bucket["scored_area_pct"] = round(float(label_bucket["scored_area_pct"]) + area_pct, 3)
             filter_rules.append("aux_prediction_scored")
             continue
@@ -478,6 +483,9 @@ def merge_unet_and_sam3_masks(
         "sam3_scored_predictions_count": scored_predictions_count,
         "sam3_advisory_predictions_count": advisory_predictions_count,
         "sam3_rejected_predictions_count": rejected_predictions_count,
+        "sam3_penalty_detections_count": len(sam3_penalty_detection_labels),
+        "sam3_penalty_detection_labels": sorted(set(sam3_penalty_detection_labels)),
+        "sam3_penalty_detection_indexes": sam3_penalty_detection_indexes,
         "sam3_filter_rules": sorted(set(filter_rules)),
         "sam3_label_coverage": label_coverage,
         "raw_combined_dirty_coverage_pct": round(raw_combined_pct, 3),
