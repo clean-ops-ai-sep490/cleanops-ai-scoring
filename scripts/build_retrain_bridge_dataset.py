@@ -32,6 +32,7 @@ class ApprovedAnnotationItem:
 
 
 YOLO_CLASS_MAP = {
+    "dirty_area": 0,
     "stain_or_water": 0,
     "stain": 0,
     "water": 0,
@@ -41,6 +42,7 @@ YOLO_CLASS_MAP = {
 }
 
 MASK_CLASS_MAP = {
+    "dirty_area": 1,
     "stain_or_water": 1,
     "stain": 1,
     "water": 1,
