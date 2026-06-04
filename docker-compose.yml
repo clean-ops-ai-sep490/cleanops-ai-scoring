@@ -91,7 +91,7 @@ services:
       - PPE_GEMINI_ENABLED=${PPE_GEMINI_ENABLED:-true}
       - PPE_GEMINI_MODE=missing_only
       - PPE_GEMINI_MODEL=gemini-2.5-flash-lite
-      - PPE_GEMINI_TIMEOUT_SEC=8
+      - PPE_GEMINI_TIMEOUT_SEC=${PPE_GEMINI_TIMEOUT_SEC:-30}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
     ports:
@@ -170,7 +170,7 @@ services:
       - PPE_GEMINI_ENABLED=${PPE_GEMINI_ENABLED:-true}
       - PPE_GEMINI_MODE=${PPE_GEMINI_MODE:-missing_only}
       - PPE_GEMINI_MODEL=${PPE_GEMINI_MODEL:-gemini-2.5-flash-lite}
-      - PPE_GEMINI_TIMEOUT_SEC=${PPE_GEMINI_TIMEOUT_SEC:-8}
+      - PPE_GEMINI_TIMEOUT_SEC=${PPE_GEMINI_TIMEOUT_SEC:-30}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GEMINI_BASE_URL=${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
       - APP_PUBLIC_BASE_URL=${APP_PUBLIC_BASE_URL:-http://localhost:8000}

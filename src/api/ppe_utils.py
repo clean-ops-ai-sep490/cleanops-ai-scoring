@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 DetectionPayload = dict[str, Any]
 BBoxPayload = dict[str, float]
+GEMINI_RETRYABLE_STATUSES = {"error", "malformed"}
+GEMINI_MAX_VERIFICATION_ATTEMPTS = 5
 
 
 @dataclass(frozen=True)
@@ -141,6 +143,134 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         return {}
 
 
+def _build_gemini_response_schema(normalized_missing: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "description": "One review result for every candidate missing PPE item.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "enum": normalized_missing,
+                            "description": "Candidate missing PPE item name exactly as provided.",
+                        },
+                        "present": {
+                            "type": "boolean",
+                            "description": "True only when this PPE item is clearly visible in at least one image.",
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Visual confidence for this item being present, from 0 to 1.",
+                        },
+                        "evidence": {
+                            "type": "string",
+                            "description": "Short visual evidence. Use an empty string when present is false.",
+                        },
+                    },
+                    "required": ["name", "present", "confidence", "evidence"],
+                },
+            },
+            "notes": {
+                "type": "string",
+                "description": "Brief notes about image quality or uncertainty.",
+            },
+        },
+        "required": ["items", "notes"],
+    }
+
+
+def _extract_gemini_text(data: dict[str, Any]) -> str:
+    text_parts: list[str] = []
+    for candidate in data.get("candidates", []):
+        content = candidate.get("content", {})
+        for part in content.get("parts", []):
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                text_parts.append(part["text"])
+    return "\n".join(text_parts).strip()
+
+
+def _parse_gemini_ppe_review(parsed: dict[str, Any], normalized_missing: list[str]) -> dict[str, Any]:
+    missing_set = set(normalized_missing)
+    raw_items = parsed.get("items")
+    item_reviews: list[dict[str, Any]] = []
+
+    if isinstance(raw_items, list):
+        reviewed_names: set[str] = set()
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            name = _normalize_item_name(raw_item.get("name"))
+            if name not in missing_set or name in reviewed_names:
+                continue
+            try:
+                confidence = float(raw_item.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            item_reviews.append(
+                {
+                    "name": name,
+                    "present": bool(raw_item.get("present")),
+                    "confidence": round(max(0.0, min(1.0, confidence)), 3),
+                    "evidence": str(raw_item.get("evidence", ""))[:200],
+                }
+            )
+            reviewed_names.add(name)
+
+        if reviewed_names == missing_set:
+            confirmed = sorted(item["name"] for item in item_reviews if item["present"])
+            return {
+                "status": "ok",
+                "confirmed_items": confirmed,
+                "remaining_missing_items": [item for item in normalized_missing if item not in confirmed],
+                "item_reviews": sorted(item_reviews, key=lambda item: item["name"]),
+                "notes": str(parsed.get("notes", ""))[:500],
+            }
+
+    present_items = parsed.get("present_items", [])
+    if isinstance(present_items, list):
+        confirmed = sorted(
+            {
+                _normalize_item_name(item)
+                for item in present_items
+                if _normalize_item_name(item) in missing_set
+            }
+        )
+        if confirmed or "present_items" in parsed:
+            return {
+                "status": "ok",
+                "confirmed_items": confirmed,
+                "remaining_missing_items": [item for item in normalized_missing if item not in confirmed],
+                "item_reviews": [
+                    {
+                        "name": item,
+                        "present": item in set(confirmed),
+                        "confidence": 1.0 if item in set(confirmed) else 0.0,
+                        "evidence": "",
+                    }
+                    for item in normalized_missing
+                ],
+                "notes": str(parsed.get("notes", ""))[:500],
+                "legacy_format": True,
+            }
+
+    reviewed = sorted(item.get("name", "") for item in item_reviews if item.get("name"))
+    return {
+        "status": "malformed",
+        "reason": "incomplete_item_reviews",
+        "confirmed_items": [],
+        "remaining_missing_items": normalized_missing,
+        "item_reviews": sorted(item_reviews, key=lambda item: item["name"]),
+        "reviewed_items": reviewed,
+        "notes": str(parsed.get("notes", ""))[:500],
+    }
+
+
 def verify_missing_items_with_gemini(
     images: list[Image.Image],
     missing_items: list[str],
@@ -159,14 +289,26 @@ def verify_missing_items_with_gemini(
         return {"status": "skipped", "reason": "no_images", "confirmed_items": []}
 
     prompt = (
-        "You are verifying PPE compliance from images. The detector may have missed some required PPE items. "
-        "Only confirm an item if it is clearly visible in at least one image. "
-        "Return JSON only with keys present_items and notes. "
-        f"Candidate missing items: {', '.join(normalized_missing)}."
+        "You are a strict PPE visual verifier. Analyze all images together because each required item may "
+        "appear in any one image. The detector may have missed some required PPE items. Review every item "
+        f"in this exact candidate list: {json.dumps(normalized_missing)}. "
+        "Use these meanings: surgical_mask means a visible medical or surgical face mask; gloves means "
+        "visible protective gloves or hand coverings. Only mark present=true when the item is clearly "
+        "visible in at least one image. If uncertain, mark present=false. Return one review object for "
+        "every candidate item and do not include items outside the candidate list."
     )
     parts: list[dict[str, Any]] = [{"text": prompt}]
     parts.extend(_image_to_inline_part(image) for image in images)
-    payload = {"contents": [{"role": "user", "parts": parts}]}
+    payload = {
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "temperature": 0,
+            "candidateCount": 1,
+            "maxOutputTokens": 512,
+            "responseMimeType": "application/json",
+            "responseSchema": _build_gemini_response_schema(normalized_missing),
+        },
+    }
     endpoint = f"{config.base_url.rstrip('/')}/models/{config.model}:generateContent"
 
     try:
@@ -178,32 +320,11 @@ def verify_missing_items_with_gemini(
         )
         response.raise_for_status()
         data = response.json()
-        text_parts: list[str] = []
-        for candidate in data.get("candidates", []):
-            content = candidate.get("content", {})
-            for part in content.get("parts", []):
-                if isinstance(part, dict) and isinstance(part.get("text"), str):
-                    text_parts.append(part["text"])
-        raw_text = "\n".join(text_parts).strip()
+        raw_text = _extract_gemini_text(data)
         parsed = _extract_json_object(raw_text)
-        present_items = parsed.get("present_items", [])
-        if not isinstance(present_items, list):
-            present_items = []
-
-        confirmed = sorted(
-            {
-                _normalize_item_name(item)
-                for item in present_items
-                if _normalize_item_name(item) in set(normalized_missing)
-            }
-        )
-        return {
-            "status": "ok",
-            "mode": config.mode,
-            "confirmed_items": confirmed,
-            "remaining_missing_items": [item for item in normalized_missing if item not in confirmed],
-            "notes": str(parsed.get("notes", ""))[:500],
-        }
+        review = _parse_gemini_ppe_review(parsed, normalized_missing)
+        review["mode"] = config.mode
+        return review
     except Exception as exc:  # noqa: BLE001
         logger.warning("PPE Gemini verification failed: %s", exc)
         return {
@@ -223,6 +344,62 @@ def _gemini_deadline_exceeded_review(missing_items: list[str]) -> dict[str, Any]
         "confirmed_items": [],
         "remaining_missing_items": normalized_missing,
     }
+
+
+async def _verify_missing_items_with_gemini_until_deadline(
+    images: list[Image.Image],
+    missing_items: list[str],
+    config: GeminiPpeConfig,
+    started_at: float,
+    deadline_sec: float,
+) -> dict[str, Any]:
+    attempts = 0
+    raw_statuses: list[str] = []
+    last_review: dict[str, Any] | None = None
+
+    while attempts < GEMINI_MAX_VERIFICATION_ATTEMPTS:
+        remaining_deadline_sec = float(deadline_sec) - (time.monotonic() - started_at)
+        if remaining_deadline_sec <= 0:
+            deadline_review = _gemini_deadline_exceeded_review(missing_items)
+            deadline_review["attempts"] = attempts
+            deadline_review["raw_statuses"] = raw_statuses
+            return deadline_review
+
+        gemini_timeout_sec = min(float(config.timeout_sec), remaining_deadline_sec)
+        effective_gemini_config = replace(config, timeout_sec=gemini_timeout_sec)
+        attempts += 1
+        try:
+            review = await asyncio.wait_for(
+                asyncio.to_thread(
+                    verify_missing_items_with_gemini,
+                    images,
+                    missing_items,
+                    effective_gemini_config,
+                ),
+                timeout=gemini_timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            deadline_review = _gemini_deadline_exceeded_review(missing_items)
+            deadline_review["attempts"] = attempts
+            deadline_review["raw_statuses"] = [*raw_statuses, "timeout"]
+            return deadline_review
+
+        last_review = review
+        raw_statuses.append(str(review.get("status", "unknown")))
+        confirmed_items = {
+            item for item in review.get("confirmed_items", []) if item in set(missing_items)
+        }
+        if review.get("status") == "ok" and confirmed_items == set(missing_items):
+            break
+        if review.get("status") not in GEMINI_RETRYABLE_STATUSES and review.get("status") != "ok":
+            break
+
+    if last_review is None:
+        last_review = _gemini_deadline_exceeded_review(missing_items)
+
+    last_review["attempts"] = attempts
+    last_review["raw_statuses"] = raw_statuses
+    return last_review
 
 
 async def evaluate_ppe_payload(
@@ -304,24 +481,13 @@ async def evaluate_ppe_payload(
         if gemini_config is None:
             gemini_review = {"status": "skipped", "reason": "not_configured", "confirmed_items": []}
         else:
-            remaining_deadline_sec = float(gemini_deadline_sec) - (time.monotonic() - started_at)
-            if remaining_deadline_sec <= 0:
-                gemini_review = _gemini_deadline_exceeded_review(missing_items)
-            else:
-                gemini_timeout_sec = min(float(gemini_config.timeout_sec), remaining_deadline_sec)
-                effective_gemini_config = replace(gemini_config, timeout_sec=gemini_timeout_sec)
-                try:
-                    gemini_review = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            verify_missing_items_with_gemini,
-                            processed_images,
-                            missing_items,
-                            effective_gemini_config,
-                        ),
-                        timeout=gemini_timeout_sec,
-                    )
-                except asyncio.TimeoutError:
-                    gemini_review = _gemini_deadline_exceeded_review(missing_items)
+            gemini_review = await _verify_missing_items_with_gemini_until_deadline(
+                processed_images,
+                missing_items,
+                gemini_config,
+                started_at,
+                gemini_deadline_sec,
+            )
             confirmed_items = [
                 item for item in gemini_review.get("confirmed_items", []) if item in set(missing_items)
             ]

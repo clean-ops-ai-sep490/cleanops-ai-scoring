@@ -484,7 +484,7 @@ def _build_settings() -> Settings:
         ppe_gemini_enabled=_as_bool("PPE_GEMINI_ENABLED", True),
         ppe_gemini_mode=os.getenv("PPE_GEMINI_MODE", "missing_only").strip().lower() or "missing_only",
         ppe_gemini_model=os.getenv("PPE_GEMINI_MODEL", "gemini-2.5-flash-lite").strip(),
-        ppe_gemini_timeout_sec=max(1, _as_int("PPE_GEMINI_TIMEOUT_SEC", 8)),
+        ppe_gemini_timeout_sec=max(1, _as_int("PPE_GEMINI_TIMEOUT_SEC", 30)),
         kaggle_dataset=os.getenv("KAGGLE_DATASET", "alyyan/trash-detection"),
         roboflow_project=os.getenv("ROBOFLOW_PROJECT", "clean-unclean-floor"),
         roboflow_version=_as_int("ROBOFLOW_VERSION", 1),
