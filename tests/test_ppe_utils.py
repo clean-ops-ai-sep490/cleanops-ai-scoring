@@ -129,6 +129,87 @@ class PpeUtilsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["missing_items"], ["helmet"])
         self.assertEqual(response["gemini_review"]["status"], "error")
 
+    @patch("src.api.ppe_utils.verify_missing_items_with_gemini")
+    @patch("src.api.ppe_utils.load_image_from_url")
+    @patch("src.api.ppe_utils.collect_filtered_detections")
+    async def test_evaluate_ppe_payload_skips_gemini_when_deadline_exceeded_before_call(
+        self,
+        collect_filtered_detections_mock,
+        load_image_from_url_mock,
+        verify_missing_items_mock,
+    ) -> None:
+        load_image_from_url_mock.return_value = Image.new("RGB", (64, 64), color=(200, 200, 200))
+        collect_filtered_detections_mock.return_value = []
+
+        response = await evaluate_ppe_payload(
+            image_urls=["https://example.test/ppe.jpg"],
+            required_objects=["helmet"],
+            model=object(),
+            timeout_sec=1,
+            min_confidence=25.0,
+            gemini_deadline_sec=0.0,
+            gemini_config=GeminiPpeConfig(
+                enabled=True,
+                mode="missing_only",
+                api_key="test-key",
+                model="gemini-test",
+                base_url="https://example.test/v1beta",
+                timeout_sec=1,
+            ),
+        )
+
+        verify_missing_items_mock.assert_not_called()
+        self.assertEqual(response["status"], "FAIL")
+        self.assertEqual(response["missing_items"], ["helmet"])
+        self.assertEqual(response["gemini_review"]["status"], "skipped")
+        self.assertEqual(response["gemini_review"]["reason"], "deadline_exceeded")
+
+    @patch("src.api.ppe_utils.verify_missing_items_with_gemini")
+    @patch("src.api.ppe_utils.load_image_from_url")
+    @patch("src.api.ppe_utils.collect_filtered_detections")
+    async def test_evaluate_ppe_payload_skips_gemini_when_call_exceeds_deadline(
+        self,
+        collect_filtered_detections_mock,
+        load_image_from_url_mock,
+        verify_missing_items_mock,
+    ) -> None:
+        load_image_from_url_mock.return_value = Image.new("RGB", (64, 64), color=(200, 200, 200))
+        collect_filtered_detections_mock.return_value = []
+
+        def slow_gemini(*_args, **_kwargs):
+            import time
+
+            time.sleep(0.2)
+            return {
+                "status": "ok",
+                "confirmed_items": ["helmet"],
+                "remaining_missing_items": [],
+            }
+
+        verify_missing_items_mock.side_effect = slow_gemini
+
+        response = await evaluate_ppe_payload(
+            image_urls=["https://example.test/ppe.jpg"],
+            required_objects=["helmet"],
+            model=object(),
+            timeout_sec=1,
+            min_confidence=25.0,
+            gemini_deadline_sec=0.01,
+            gemini_config=GeminiPpeConfig(
+                enabled=True,
+                mode="missing_only",
+                api_key="test-key",
+                model="gemini-test",
+                base_url="https://example.test/v1beta",
+                timeout_sec=1,
+            ),
+        )
+
+        self.assertEqual(response["status"], "FAIL")
+        self.assertEqual(response["missing_items"], ["helmet"])
+        self.assertEqual(response["gemini_review"]["status"], "skipped")
+        self.assertEqual(response["gemini_review"]["reason"], "deadline_exceeded")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,6 +44,7 @@ async def evaluate_ppe(request: PpeEvaluateRequest):
         timeout_sec=app_state.REQUEST_TIMEOUT_SEC,
         min_confidence=request.min_confidence,
         batch_concurrency=app_state.settings.inference_batch_concurrency,
+        gemini_deadline_sec=app_state.settings.inference_deadline_sec,
         gemini_config=GeminiPpeConfig(
             enabled=app_state.settings.ppe_gemini_enabled,
             mode=app_state.settings.ppe_gemini_mode,

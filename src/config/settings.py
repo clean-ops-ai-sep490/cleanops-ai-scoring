@@ -481,7 +481,7 @@ def _build_settings() -> Settings:
         roboflow_use_cache=_as_bool("ROBOFLOW_USE_CACHE", True),
         gemini_api_key=os.getenv("GEMINI_API_KEY"),
         gemini_base_url=os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").strip(),
-        ppe_gemini_enabled=_as_bool("PPE_GEMINI_ENABLED", False),
+        ppe_gemini_enabled=_as_bool("PPE_GEMINI_ENABLED", True),
         ppe_gemini_mode=os.getenv("PPE_GEMINI_MODE", "missing_only").strip().lower() or "missing_only",
         ppe_gemini_model=os.getenv("PPE_GEMINI_MODEL", "gemini-2.5-flash-lite").strip(),
         ppe_gemini_timeout_sec=max(1, _as_int("PPE_GEMINI_TIMEOUT_SEC", 8)),

@@ -5,7 +5,8 @@ import base64
 import json
 import logging
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from io import BytesIO
 from typing import Any
 
@@ -26,7 +27,7 @@ class GeminiPpeConfig:
     api_key: str | None
     model: str
     base_url: str
-    timeout_sec: int
+    timeout_sec: float
 
 
 def normalize_confidence_threshold(min_confidence: float) -> float:
@@ -214,6 +215,16 @@ def verify_missing_items_with_gemini(
         }
 
 
+def _gemini_deadline_exceeded_review(missing_items: list[str]) -> dict[str, Any]:
+    normalized_missing = [_normalize_item_name(item) for item in missing_items if _normalize_item_name(item)]
+    return {
+        "status": "skipped",
+        "reason": "deadline_exceeded",
+        "confirmed_items": [],
+        "remaining_missing_items": normalized_missing,
+    }
+
+
 async def evaluate_ppe_payload(
     image_urls: list[str],
     required_objects: list[str],
@@ -222,7 +233,9 @@ async def evaluate_ppe_payload(
     min_confidence: float,
     batch_concurrency: int = 2,
     gemini_config: GeminiPpeConfig | None = None,
+    gemini_deadline_sec: float = 30.0,
 ) -> dict[str, Any]:
+    started_at = time.monotonic()
     aggregated_confidences: dict[str, float] = {}
     detected_items: list[dict[str, Any]] = []
     failed_images: list[dict[str, Any]] = []
@@ -291,12 +304,24 @@ async def evaluate_ppe_payload(
         if gemini_config is None:
             gemini_review = {"status": "skipped", "reason": "not_configured", "confirmed_items": []}
         else:
-            gemini_review = await asyncio.to_thread(
-                verify_missing_items_with_gemini,
-                processed_images,
-                missing_items,
-                gemini_config,
-            )
+            remaining_deadline_sec = float(gemini_deadline_sec) - (time.monotonic() - started_at)
+            if remaining_deadline_sec <= 0:
+                gemini_review = _gemini_deadline_exceeded_review(missing_items)
+            else:
+                gemini_timeout_sec = min(float(gemini_config.timeout_sec), remaining_deadline_sec)
+                effective_gemini_config = replace(gemini_config, timeout_sec=gemini_timeout_sec)
+                try:
+                    gemini_review = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            verify_missing_items_with_gemini,
+                            processed_images,
+                            missing_items,
+                            effective_gemini_config,
+                        ),
+                        timeout=gemini_timeout_sec,
+                    )
+                except asyncio.TimeoutError:
+                    gemini_review = _gemini_deadline_exceeded_review(missing_items)
             confirmed_items = [
                 item for item in gemini_review.get("confirmed_items", []) if item in set(missing_items)
             ]
