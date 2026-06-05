@@ -517,6 +517,8 @@ def evaluate_image_with_artifacts(
     )
     recomputed_scoring["yolo_penalty_detections_count"] = yolo_penalty_count
     recomputed_scoring["sam3_penalty_detections_count"] = sam3_penalty_count
+    recomputed_scoring["yolo_penalty_detection_indexes"] = yolo_penalty_indexes
+    recomputed_scoring["sam3_penalty_detection_indexes"] = sam3_penalty_indexes
     recomputed_scoring["penalty_detection_source_counts"] = {
         "yolo": yolo_penalty_count,
         "sam3": sam3_penalty_count,

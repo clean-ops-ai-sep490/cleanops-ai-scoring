@@ -102,6 +102,61 @@ def _draw_labeled_box(
     )
 
 
+def _as_index_set(raw_indexes: Any) -> set[int]:
+    if not isinstance(raw_indexes, list):
+        return set()
+
+    indexes: set[int] = set()
+    for item in raw_indexes:
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, int):
+            indexes.add(item)
+    return indexes
+
+
+def _bbox_from_sam3_prediction(prediction: Dict[str, Any], *, width: int, height: int) -> list[int]:
+    raw_bbox = prediction.get("bbox_xyxy") or prediction.get("bbox_px") or prediction.get("bbox")
+    if not isinstance(raw_bbox, (list, tuple)) or len(raw_bbox) < 4:
+        return [0, 0, 0, 0]
+
+    try:
+        x1, y1, x2, y2 = [float(value) for value in raw_bbox[:4]]
+    except (TypeError, ValueError):
+        return [0, 0, 0, 0]
+
+    return [
+        _clamp_int(x1, 0, width),
+        _clamp_int(y1, 0, height),
+        _clamp_int(x2, 0, width),
+        _clamp_int(y2, 0, height),
+    ]
+
+
+def _clear_sam3_penalty_regions_from_display_mask(
+    display_mask: np.ndarray,
+    sam3_result: Dict[str, Any] | None,
+    penalty_indexes: set[int],
+) -> None:
+    if not penalty_indexes or not isinstance(sam3_result, dict):
+        return
+
+    prediction_masks = sam3_result.get("_prediction_masks")
+    if not isinstance(prediction_masks, list):
+        return
+
+    for idx in penalty_indexes:
+        if idx < 0 or idx >= len(prediction_masks):
+            continue
+        item = prediction_masks[idx]
+        if not isinstance(item, dict):
+            continue
+        mask = item.get("mask")
+        if not isinstance(mask, np.ndarray) or mask.shape[:2] != display_mask.shape[:2]:
+            continue
+        display_mask[(mask > 0) & (display_mask == 1)] = 0
+
+
 def render_unet_overlay(rgb: np.ndarray, pred_original_size: np.ndarray) -> bytes:
     overlay = rgb.copy()
 
@@ -209,16 +264,25 @@ def render_hybrid_overlay(
     legend_box_size = _clamp_int(short_side * 0.022 * panel_scale, 12, 18)
     legend_gap = _clamp_int(short_side * 0.014 * panel_scale, 10, 16)
 
-    stain_region = pred_original_size == 1
+    if "yolo_penalty_detection_indexes" in scoring:
+        yolo_penalty_detection_indexes = _as_index_set(scoring.get("yolo_penalty_detection_indexes"))
+    else:
+        yolo_penalty_detection_indexes = _as_index_set(scoring.get("penalty_detection_indexes"))
+    sam3_penalty_detection_indexes = _as_index_set(scoring.get("sam3_penalty_detection_indexes"))
+
+    display_mask = pred_original_size.copy()
+    _clear_sam3_penalty_regions_from_display_mask(display_mask, sam3_result, sam3_penalty_detection_indexes)
+
+    stain_region = display_mask == 1
     overlay[stain_region] = (overlay[stain_region] * 0.5 + np.array([255, 80, 80]) * 0.5).astype(np.uint8)
 
-    wet_region = pred_original_size == 2
+    wet_region = display_mask == 2
     overlay[wet_region] = (overlay[wet_region] * 0.5 + np.array([80, 255, 255]) * 0.5).astype(np.uint8)
 
     composed = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
 
-    stain_mask = (pred_original_size == 1).astype(np.uint8) * 255
-    wet_mask = (pred_original_size == 2).astype(np.uint8) * 255
+    stain_mask = (display_mask == 1).astype(np.uint8) * 255
+    wet_mask = (display_mask == 2).astype(np.uint8) * 255
 
     stain_contours = cv2.findContours(stain_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     wet_contours = cv2.findContours(wet_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -228,20 +292,14 @@ def render_hybrid_overlay(
     cv2.drawContours(composed, stain_contours, -1, (30, 30, 220), contour_thickness)
     cv2.drawContours(composed, wet_contours, -1, (220, 200, 30), contour_thickness)
     visual_review = visual_review or {}
-    penalty_detection_indexes = {
-        idx
-        for idx in scoring.get("penalty_detection_indexes", [])
-        if isinstance(idx, int)
-    }
     # Production visualization should only draw object boxes that affect scoring.
-    # Dirty/wet segmentation is shown as one merged overlay, not extra Roboflow/SAM3 boxes.
-    # Object advisory boxes are ignored here unless they become YOLO results and penalty indexes.
+    # Dirty/wet segmentation is shown as an overlay, while trash-like SAM3 objects are boxed.
     advisory_object_boxes: list[Dict[str, Any]] = []
     advisory_dirty_boxes: list[Dict[str, Any]] = []
     highlight_region_ids: set[int] = set()
 
     for idx, item in enumerate(yolo_result.get("results", [])):
-        if idx not in penalty_detection_indexes:
+        if idx not in yolo_penalty_detection_indexes:
             continue
         x1, y1, x2, y2 = [int(v) for v in item.get("bbox", [0, 0, 0, 0])]
         class_name = str(item.get("class_name", "obj"))
@@ -257,6 +315,37 @@ def render_hybrid_overlay(
             text_color=(0, 0, 0),
             padding=label_padding,
         )
+
+    sam3_predictions = sam3_result.get("predictions", []) if isinstance(sam3_result, dict) else []
+    if isinstance(sam3_predictions, list):
+        for idx, item in enumerate(sam3_predictions):
+            if idx not in sam3_penalty_detection_indexes or not isinstance(item, dict):
+                continue
+            bbox = _bbox_from_sam3_prediction(item, width=width, height=height)
+            if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+                continue
+            label_text = str(
+                item.get("label_normalized")
+                or item.get("class")
+                or item.get("label")
+                or item.get("prompt")
+                or "trash"
+            ).replace("_", " ")
+            try:
+                confidence = float(item.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            label = _truncate_text(f"{label_text} {confidence:.2f}", 28)
+            _draw_labeled_box(
+                composed,
+                bbox,
+                label,
+                (60, 200, 20),
+                font_scale=label_font_scale,
+                thickness=box_thickness,
+                text_color=(0, 0, 0),
+                padding=label_padding,
+            )
 
     for item in advisory_object_boxes:
         x1, y1, x2, y2 = [int(v) for v in item.get("bbox_px", [0, 0, 0, 0])]

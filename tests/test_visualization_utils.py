@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import io
 import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -23,6 +25,7 @@ class VisualizationUtilsTests(unittest.TestCase):
         sam3_result: dict[str, object] | None = None,
         visual_review: dict[str, object] | None = None,
         dirty_region_candidates: list[dict[str, object]] | None = None,
+        pred_original_size: np.ndarray | None = None,
     ):
         drawn_boxes: list[tuple[list[int], str]] = []
         panel_texts: list[str] = []
@@ -35,7 +38,7 @@ class VisualizationUtilsTests(unittest.TestCase):
             return image
 
         rgb = np.full((1000, 1000, 3), 240, dtype=np.uint8)
-        mask = np.zeros((1000, 1000), dtype=np.uint8)
+        mask = pred_original_size if pred_original_size is not None else np.zeros((1000, 1000), dtype=np.uint8)
 
         with patch("src.api.visualization_utils._draw_labeled_box", side_effect=fake_draw_box):
             with patch("src.api.visualization_utils.cv2.putText", side_effect=fake_put_text):
@@ -76,6 +79,118 @@ class VisualizationUtilsTests(unittest.TestCase):
         self.assertEqual(len(drawn_boxes), 1)
         self.assertIn("trash", drawn_boxes[0][1])
         self.assertTrue(any(text == "PENALTY OBJECTS: 1" for text in panel_texts))
+
+    def test_renderer_draws_sam3_penalty_object_boxes(self):
+        drawn_boxes, panel_texts = self._render_with_capture(
+            yolo_result={"detections_count": 0, "results": []},
+            scoring={
+                "verdict": "PENDING",
+                "quality_score": 87.0,
+                "base_clean_score": 97.0,
+                "object_penalty": 10.0,
+                "penalty_detections_count": 1,
+                "penalty_detection_indexes": [0],
+                "yolo_penalty_detection_indexes": [],
+                "sam3_penalty_detection_indexes": [0],
+            },
+            sam3_result={
+                "predictions": [
+                    {
+                        "class": "Trash",
+                        "label_normalized": "trash",
+                        "confidence": 0.53,
+                        "bbox_xyxy": [120, 100, 220, 180],
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(len(drawn_boxes), 1)
+        self.assertEqual(drawn_boxes[0][0], [120, 100, 220, 180])
+        self.assertIn("trash", drawn_boxes[0][1])
+        self.assertTrue(any(text == "PENALTY OBJECTS: 1" for text in panel_texts))
+
+    def test_renderer_does_not_draw_yolo_person_when_only_sam3_index_matches(self):
+        drawn_boxes, _ = self._render_with_capture(
+            yolo_result={
+                "detections_count": 1,
+                "results": [
+                    {"class_name": "person", "confidence": 0.62, "bbox": [10, 20, 110, 120]},
+                ],
+            },
+            scoring={
+                "verdict": "PENDING",
+                "quality_score": 87.0,
+                "base_clean_score": 97.0,
+                "object_penalty": 10.0,
+                "penalty_detections_count": 1,
+                "penalty_detection_indexes": [0],
+                "yolo_penalty_detection_indexes": [],
+                "sam3_penalty_detection_indexes": [0],
+            },
+            sam3_result={
+                "predictions": [
+                    {
+                        "class": "Trash",
+                        "label_normalized": "trash",
+                        "confidence": 0.53,
+                        "bbox_xyxy": [120, 100, 220, 180],
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(len(drawn_boxes), 1)
+        self.assertNotIn("person", drawn_boxes[0][1])
+        self.assertIn("trash", drawn_boxes[0][1])
+
+    def test_renderer_removes_sam3_penalty_object_from_dirty_overlay(self):
+        rgb = np.full((1000, 1000, 3), 240, dtype=np.uint8)
+        mask = np.zeros((1000, 1000), dtype=np.uint8)
+        mask[500:620, 520:720] = 1
+        sam3_mask = np.zeros((1000, 1000), dtype=np.uint8)
+        sam3_mask[500:620, 520:720] = 1
+
+        rendered = render_hybrid_overlay(
+            rgb=rgb,
+            pred_original_size=mask,
+            yolo_result={"detections_count": 0, "results": []},
+            scoring={
+                "verdict": "PENDING",
+                "quality_score": 87.0,
+                "base_clean_score": 97.0,
+                "object_penalty": 10.0,
+                "penalty_detections_count": 1,
+                "penalty_detection_indexes": [0],
+                "yolo_penalty_detection_indexes": [],
+                "sam3_penalty_detection_indexes": [0],
+            },
+            env_key="LOBBY_CORRIDOR",
+            visualize_jpeg_quality=100,
+            sam3_result={
+                "_prediction_masks": [
+                    {
+                        "label": "Trash",
+                        "label_normalized": "trash",
+                        "mask": sam3_mask,
+                        "mask_source": "polygon",
+                    }
+                ],
+                "predictions": [
+                    {
+                        "class": "Trash",
+                        "label_normalized": "trash",
+                        "confidence": 0.53,
+                        "bbox_xyxy": [520, 500, 720, 620],
+                    }
+                ],
+            },
+        )
+
+        decoded = np.array(Image.open(io.BytesIO(rendered)).convert("RGB"))
+        center_pixel = decoded[560, 620]
+        self.assertGreater(center_pixel[1], 220)
+        self.assertGreater(center_pixel[2], 220)
 
     def test_renderer_hides_ignored_objects_when_no_penalty_indexes(self):
         drawn_boxes, panel_texts = self._render_with_capture(
