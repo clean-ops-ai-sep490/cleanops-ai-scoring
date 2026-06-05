@@ -45,6 +45,7 @@ DEFAULT_ROBOFLOW_WET_LABELS = (
 )
 
 STRONG_AUX_DIRTY_LABELS = {"garbage", "trash", "debris", "rubbish", "litter", "waste"}
+SAM3_OBJECT_TRASH_LABELS = STRONG_AUX_DIRTY_LABELS
 FLOOR_LIKE_DISCOUNT_ENVS = {"LOBBY_CORRIDOR", "BASEMENT_PARKING", "GLASS_SURFACE"}
 HIGH_RISK_REVIEW_ENVS = {"RESTROOM", "HOSPITAL_OR"}
 
@@ -227,6 +228,49 @@ def _unet_component_summary(unet_mask: np.ndarray) -> Dict[str, object]:
     }
 
 
+def _mask_overlap_ratio(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
+    area_a = int(np.count_nonzero(mask_a))
+    area_b = int(np.count_nonzero(mask_b))
+    min_area = min(area_a, area_b)
+    if min_area <= 0:
+        return 0.0
+
+    intersection = int(np.count_nonzero(mask_a & mask_b))
+    return intersection / min_area
+
+
+def _dedupe_object_penalty_predictions(
+    candidates: list[dict[str, Any]],
+    *,
+    overlap_threshold: float = 0.5,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    candidates_sorted = sorted(
+        candidates,
+        key=lambda item: (
+            _as_float(item.get("confidence"), 0.0),
+            _as_float(item.get("area_pct"), 0.0),
+        ),
+        reverse=True,
+    )
+
+    for candidate in candidates_sorted:
+        mask = candidate.get("mask")
+        if not isinstance(mask, np.ndarray):
+            continue
+        is_duplicate = False
+        for existing in selected:
+            existing_mask = existing.get("mask")
+            if isinstance(existing_mask, np.ndarray) and _mask_overlap_ratio(mask, existing_mask) >= overlap_threshold:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            selected.append(candidate)
+
+    selected.sort(key=lambda item: _as_int(item.get("index")))
+    return selected
+
+
 def merge_unet_and_sam3_masks(
     unet_mask: np.ndarray,
     sam3_result: Dict[str, Any],
@@ -270,14 +314,13 @@ def merge_unet_and_sam3_masks(
     scored_wet_mask = np.zeros_like(merged, dtype=bool)
     advisory_mask = np.zeros_like(merged, dtype=bool)
     raw_aux_mask = np.zeros_like(merged, dtype=bool)
-    class_counts = {"stain_or_water": 0, "wet_surface": 0, "ignored": 0}
+    class_counts = {"stain_or_water": 0, "wet_surface": 0, "trash_like_object": 0, "ignored": 0}
     filter_rules: list[str] = []
     label_coverage: dict[str, dict[str, object]] = {}
     scored_predictions_count = 0
     advisory_predictions_count = 0
     rejected_predictions_count = 0
-    sam3_penalty_detection_labels: list[str] = []
-    sam3_penalty_detection_indexes: list[int] = []
+    object_penalty_candidates: list[dict[str, Any]] = []
 
     prediction_masks = sam3_result.get("_prediction_masks") if isinstance(sam3_result, dict) else []
     prediction_items: list[dict[str, Any]] = []
@@ -317,7 +360,13 @@ def merge_unet_and_sam3_masks(
 
         label_bucket = label_coverage.setdefault(
             label or "unknown",
-            {"raw_area_pct": 0.0, "scored_area_pct": 0.0, "advisory_area_pct": 0.0, "count": 0},
+            {
+                "raw_area_pct": 0.0,
+                "scored_area_pct": 0.0,
+                "advisory_area_pct": 0.0,
+                "object_area_pct": 0.0,
+                "count": 0,
+            },
         )
         label_bucket["raw_area_pct"] = round(float(label_bucket["raw_area_pct"]) + area_pct, 3)
         label_bucket["count"] = int(label_bucket["count"]) + 1
@@ -336,8 +385,7 @@ def merge_unet_and_sam3_masks(
             filter_rules.append("label_not_scored")
             continue
 
-        class_counts["stain_or_water"] += 1
-        is_strong_label = label in STRONG_AUX_DIRTY_LABELS
+        is_object_trash_label = label in SAM3_OBJECT_TRASH_LABELS
         is_large_bbox_fallback = mask_source == "bbox_fallback" and area_pct >= 15.0
         is_single_giant_aux = total_aux_predictions <= 1 and area_pct >= 35.0 and unet_pct < 5.0
         is_moderate_stain = area_pct <= 30.0
@@ -348,6 +396,23 @@ def merge_unet_and_sam3_masks(
             and unet_floor_like_for_aux_guard
         )
         is_multi_region_dirty = total_aux_predictions >= 3
+
+        if is_object_trash_label:
+            class_counts["trash_like_object"] += 1
+            object_penalty_candidates.append(
+                {
+                    "index": prediction_idx,
+                    "label": label,
+                    "mask": mask,
+                    "area_pct": area_pct,
+                    "confidence": item.get("confidence", 0.0),
+                }
+            )
+            label_bucket["object_area_pct"] = round(float(label_bucket["object_area_pct"]) + area_pct, 3)
+            filter_rules.append("object_trash_penalty")
+            continue
+
+        class_counts["stain_or_water"] += 1
 
         if is_large_bbox_fallback:
             advisory_mask |= mask
@@ -363,7 +428,7 @@ def merge_unet_and_sam3_masks(
             filter_rules.append("giant_stain_floor_like_advisory")
             continue
 
-        if is_single_giant_aux and not is_strong_label:
+        if is_single_giant_aux:
             advisory_mask |= mask
             advisory_predictions_count += 1
             label_bucket["advisory_area_pct"] = round(float(label_bucket["advisory_area_pct"]) + area_pct, 3)
@@ -373,12 +438,9 @@ def merge_unet_and_sam3_masks(
                 filter_rules.append("single_giant_aux_ignored")
             continue
 
-        if is_strong_label or is_moderate_stain or is_multi_region_dirty:
+        if is_moderate_stain or is_multi_region_dirty:
             scored_dirty_mask |= mask
             scored_predictions_count += 1
-            if is_strong_label:
-                sam3_penalty_detection_labels.append(label)
-                sam3_penalty_detection_indexes.append(prediction_idx)
             label_bucket["scored_area_pct"] = round(float(label_bucket["scored_area_pct"]) + area_pct, 3)
             filter_rules.append("aux_prediction_scored")
             continue
@@ -388,10 +450,27 @@ def merge_unet_and_sam3_masks(
         label_bucket["advisory_area_pct"] = round(float(label_bucket["advisory_area_pct"]) + area_pct, 3)
         filter_rules.append("large_stain_advisory")
 
+    object_penalty_predictions = _dedupe_object_penalty_predictions(object_penalty_candidates)
+    sam3_penalty_detection_labels = [
+        str(item.get("label", "")).strip()
+        for item in object_penalty_predictions
+        if str(item.get("label", "")).strip()
+    ]
+    sam3_penalty_detection_indexes = [
+        _as_int(item.get("index"))
+        for item in object_penalty_predictions
+    ]
+    object_penalty_mask = np.zeros_like(merged, dtype=bool)
+    for item in object_penalty_predictions:
+        mask = item.get("mask")
+        if isinstance(mask, np.ndarray) and mask.shape[:2] == merged.shape[:2]:
+            object_penalty_mask |= mask
+
     merged[scored_dirty_mask] = 1
     merged[scored_wet_mask] = 2
 
     sam3_px = int(np.count_nonzero(scored_dirty_mask | scored_wet_mask))
+    object_penalty_px = int(np.count_nonzero(object_penalty_mask))
     raw_sam3_px = int(np.count_nonzero(raw_aux_mask))
     advisory_px = int(np.count_nonzero(advisory_mask))
     raw_merged_mask = merged.copy()
@@ -483,6 +562,10 @@ def merge_unet_and_sam3_masks(
         "sam3_scored_predictions_count": scored_predictions_count,
         "sam3_advisory_predictions_count": advisory_predictions_count,
         "sam3_rejected_predictions_count": rejected_predictions_count,
+        "sam3_object_penalty_detections_count": len(sam3_penalty_detection_labels),
+        "sam3_object_penalty_detection_labels": sorted(set(sam3_penalty_detection_labels)),
+        "sam3_object_penalty_detection_indexes": sam3_penalty_detection_indexes,
+        "sam3_object_penalty_coverage_pct": round((object_penalty_px / total_px) * 100.0, 3),
         "sam3_penalty_detections_count": len(sam3_penalty_detection_labels),
         "sam3_penalty_detection_labels": sorted(set(sam3_penalty_detection_labels)),
         "sam3_penalty_detection_indexes": sam3_penalty_detection_indexes,

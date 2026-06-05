@@ -329,7 +329,7 @@ class ScoringUtilsTests(unittest.TestCase):
         self.assertEqual(merged["sam3_penalty_detections_count"], 0)
         self.assertIn("aux_prediction_scored", merged["sam3_filter_rules"])
 
-    def test_sam3_trash_predictions_count_as_object_penalty(self):
+    def test_sam3_trash_predictions_count_as_object_penalty_without_dirty_coverage(self):
         unet_mask = np.zeros((10, 10), dtype=np.uint8)
         trash_a = np.zeros((10, 10), dtype=np.uint8)
         trash_a[0:2, 0:2] = 1
@@ -365,15 +365,85 @@ class ScoringUtilsTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(merged["sam3_scored_predictions_count"], 2)
+        self.assertEqual(merged["sam3_scored_predictions_count"], 0)
+        self.assertEqual(merged["sam3_dirty_coverage_pct"], 0.0)
+        self.assertEqual(merged["combined_dirty_coverage_pct"], 0.0)
+        self.assertEqual(merged["sam3_object_penalty_detections_count"], 2)
         self.assertEqual(merged["sam3_penalty_detections_count"], 2)
         self.assertEqual(merged["sam3_penalty_detection_labels"], ["trash"])
         self.assertEqual(merged["sam3_penalty_detection_indexes"], [0, 1])
         self.assertEqual(scoring["penalty_detections_count"], 2)
         self.assertEqual(scoring["object_penalty"], 20.0)
-        self.assertEqual(scoring["quality_score"], 72.0)
+        self.assertEqual(scoring["quality_score"], 80.0)
         self.assertEqual(scoring["verdict"], "PENDING")
         self.assertIn("trash-like objects remain", scoring["reasons"])
+
+    def test_overlapping_sam3_trash_labels_count_as_one_object_penalty(self):
+        unet_mask = np.zeros((10, 10), dtype=np.uint8)
+        trash_mask = np.zeros((10, 10), dtype=np.uint8)
+        trash_mask[1:8, 1:8] = 1
+        garbage_mask = np.zeros((10, 10), dtype=np.uint8)
+        garbage_mask[2:8, 2:8] = 1
+
+        merged = merge_unet_and_sam3_masks(
+            unet_mask,
+            {
+                "_prediction_masks": [
+                    {
+                        "label": "Trash",
+                        "label_normalized": "trash",
+                        "mask": trash_mask,
+                        "mask_source": "polygon",
+                        "confidence": 0.52,
+                    },
+                    {
+                        "label": "Garbage",
+                        "label_normalized": "garbage",
+                        "mask": garbage_mask,
+                        "mask_source": "polygon",
+                        "confidence": 0.74,
+                    },
+                ]
+            },
+            dirty_labels=("Trash", "Garbage", "Stain"),
+            wet_labels=("Wet_Floor",),
+            env_key="LOBBY_CORRIDOR",
+        )
+
+        self.assertEqual(merged["sam3_dirty_coverage_pct"], 0.0)
+        self.assertEqual(merged["combined_dirty_coverage_pct"], 0.0)
+        self.assertEqual(merged["sam3_object_penalty_detections_count"], 1)
+        self.assertEqual(merged["sam3_penalty_detections_count"], 1)
+        self.assertEqual(merged["sam3_penalty_detection_labels"], ["garbage"])
+        self.assertEqual(merged["sam3_penalty_detection_indexes"], [1])
+        self.assertIn("object_trash_penalty", merged["sam3_filter_rules"])
+
+    def test_sam3_stain_still_increases_dirty_coverage(self):
+        unet_mask = np.zeros((10, 10), dtype=np.uint8)
+        stain_mask = np.zeros((10, 10), dtype=np.uint8)
+        stain_mask[0:2, 0:5] = 1
+
+        merged = merge_unet_and_sam3_masks(
+            unet_mask,
+            {
+                "_prediction_masks": [
+                    {
+                        "label": "Stain",
+                        "label_normalized": "stain",
+                        "mask": stain_mask,
+                        "mask_source": "polygon",
+                    }
+                ]
+            },
+            dirty_labels=("Trash", "Stain"),
+            wet_labels=("Wet_Floor",),
+            env_key="LOBBY_CORRIDOR",
+        )
+
+        self.assertEqual(merged["sam3_scored_predictions_count"], 1)
+        self.assertEqual(merged["sam3_dirty_coverage_pct"], 10.0)
+        self.assertEqual(merged["combined_dirty_coverage_pct"], 10.0)
+        self.assertEqual(merged["sam3_penalty_detections_count"], 0)
 
     def test_yolo_and_sam3_penalty_counts_are_additive_and_capped(self):
         unet_mask = np.zeros((10, 10), dtype=np.uint8)
@@ -629,7 +699,7 @@ class ScoringUtilsTests(unittest.TestCase):
             unet_mask,
             {
                 "_prediction_masks": [
-                    {"label": "Garbage", "label_normalized": "garbage", "mask": mask, "mask_source": "polygon"}
+                    {"label": "Stain", "label_normalized": "stain", "mask": mask, "mask_source": "polygon"}
                     for mask in masks
                 ]
             },
