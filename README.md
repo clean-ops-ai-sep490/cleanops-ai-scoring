@@ -321,6 +321,8 @@ Flow production retrain:
 3. Trainer chay `python scripts/run_retrain_pipeline.py`.
 4. Candidate artifacts duoc upload len Blob tai `RETRAIN_CONTAINER/RETRAIN_EXTERNAL_PREFIX`.
 
+Trainer production trong repo nay khong phu thuoc vao repo trainer standalone cu. Repo standalone co the dung lam tham chieu cach train/benchmark, nhung khong copy `data/`, `outputs/`, `.venv/`, `__pycache__/`, hoac checkpoint `.pt/.pth` vao source tree. Neu muon dung model da train san, publish no nhu external candidate/run artifact bang `scripts/upload_candidate_to_blob.py` hoac `scripts/publish_retrain_run_to_blob.py`, sau do de backend promotion gate xu ly.
+
 Bien moi truong lien quan trong service `cleanops-ai-scoring-api`:
 
 - RETRAIN_API_ENABLED=true
@@ -344,6 +346,7 @@ Luu y:
 - Mac dinh compose da bat RETRAIN_USE_REMOTE_TRAINER=true, nhung `RETRAIN_TRAINER_BASE_URL` can duoc set ro rang theo moi truong.
 - Voi flow host trainer local + `ngrok`, scoring API trong Docker se goi trainer qua URL `https://<your-ngrok-domain>`.
 - Service trainer chay command train qua bien TRAINER_COMMAND. Flow production dung `python scripts/run_retrain_pipeline.py` de build dataset tu approved annotations, train YOLO/U-Net, va publish candidate artifacts.
+- Mac dinh trainer fine-tune U-Net tu active Blob checkpoint. Neu bat `RETRAIN_ALLOW_BASE_FALLBACK=true` va active checkpoint khong co, trainer se train U-Net tu encoder weights da cau hinh thay vi truyen checkpoint rong.
 - Neu tat RETRAIN_USE_REMOTE_TRAINER va RETRAIN_COMMAND de trong, API se fallback candidate da co san tren Blob (neu RETRAIN_ALLOW_EXISTING_BLOB_CANDIDATE=true).
 - De backend promote duoc, can dam bao candidate artifacts ton tai tai prefix `scoring/external/latest` (hoac prefix ban da set).
 

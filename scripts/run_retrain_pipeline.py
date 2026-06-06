@@ -70,15 +70,32 @@ def recreate_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def run_command(args: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def run_command(
+    args: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    timeout_seconds: int | None = None,
+) -> subprocess.CompletedProcess[str]:
     print(f"[RUN] {' '.join(args)}", flush=True)
-    proc = subprocess.run(
-        args,
-        cwd=str(PROJECT_ROOT),
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            args,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if stdout:
+            print(stdout, flush=True)
+        if stderr:
+            print(stderr, file=sys.stderr, flush=True)
+        raise RuntimeError(
+            f"Command timed out after {timeout_seconds} seconds: {' '.join(args)}"
+        ) from exc
     if proc.stdout:
         print(proc.stdout, flush=True)
     if proc.stderr:
@@ -95,6 +112,17 @@ def load_json(path: Path) -> dict[str, Any]:
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+
+
+def ensure_writable_project_path(path: Path, label: str) -> None:
+    ensure_inside_project(path)
+    if path.exists() and path.is_dir():
+        raise ValueError(f"{label} must be a file path, got directory: {path}")
+
+
+def ensure_existing_file(path: Path, label: str) -> None:
+    if not path.is_file():
+        raise RuntimeError(f"{label} not found: {path}")
 
 
 def list_images(path: Path) -> list[Path]:
@@ -289,6 +317,7 @@ def resolve_active_base_models(connection_string: str) -> tuple[Path, Path, dict
         if require_active and not allow_fallback:
             raise RuntimeError("RETRAIN_USE_ACTIVE_BASELINE=false is not allowed while RETRAIN_REQUIRE_ACTIVE_BASELINE=true.")
         metadata["mode"] = "base-fallback-disabled"
+        metadata["unet_init_checkpoint_available"] = False
         return resolve_path(env_str("RETRAIN_YOLO_MODEL", "yolov8n.pt")), Path(), metadata
 
     service = blob_service(connection_string)
@@ -304,6 +333,7 @@ def resolve_active_base_models(connection_string: str) -> tuple[Path, Path, dict
         if allow_fallback and not require_active:
             metadata["mode"] = "base-fallback-missing-active"
             metadata["missing_active_error"] = str(exc)
+            metadata["unet_init_checkpoint_available"] = False
             return resolve_path(env_str("RETRAIN_YOLO_MODEL", "yolov8n.pt")), Path(), metadata
         raise RuntimeError(
             "Active model is required for production retrain but could not be downloaded "
@@ -311,6 +341,7 @@ def resolve_active_base_models(connection_string: str) -> tuple[Path, Path, dict
         ) from exc
 
     unet_metadata = inspect_unet_checkpoint(unet_active_path)
+    unet_metadata["init_checkpoint_available"] = True
     metadata.update(
         {
             "mode": "active-finetune",
@@ -400,6 +431,13 @@ def main() -> None:
     candidate_yolo_path = resolve_path(env_str("RETRAIN_CANDIDATE_YOLO_FILE", "outputs/retrain/candidate/yolo_best.pt"))
     candidate_unet_path = resolve_path(env_str("RETRAIN_CANDIDATE_UNET_FILE", "outputs/retrain/candidate/unet_best.pth"))
     candidate_metrics_path = resolve_path(env_str("RETRAIN_CANDIDATE_METRICS_FILE", "outputs/retrain/candidate_metrics.json"))
+    command_timeout_seconds = max(30, env_int("RETRAIN_COMMAND_TIMEOUT_SEC", 7200))
+
+    ensure_inside_project(dataset_root)
+    ensure_inside_project(yolo_project_dir)
+    ensure_writable_project_path(candidate_yolo_path, "RETRAIN_CANDIDATE_YOLO_FILE")
+    ensure_writable_project_path(candidate_unet_path, "RETRAIN_CANDIDATE_UNET_FILE")
+    ensure_writable_project_path(candidate_metrics_path, "RETRAIN_CANDIDATE_METRICS_FILE")
 
     min_approved = env_int("RETRAIN_MIN_APPROVED_ANNOTATIONS", 5)
     dataset_limit = env_int("RETRAIN_DATASET_LIMIT", 5)
@@ -433,7 +471,7 @@ def main() -> None:
     if only_after_date:
         build_args.extend(["--only-after-date", only_after_date])
 
-    run_command(build_args)
+    run_command(build_args, timeout_seconds=command_timeout_seconds)
     summary = load_json(dataset_root / "reports" / "bridge_summary.json")
     exported = int(summary.get("exported_annotation_items") or 0)
     errors = int(summary.get("error_items") or 0)
@@ -450,8 +488,10 @@ def main() -> None:
 
     if yolo_frozen:
         print("[YOLO] RETRAIN_FREEZE_YOLO=true; reusing active YOLO artifact.", flush=True)
+        ensure_existing_file(active_yolo_path, "Active or fallback YOLO baseline")
         shutil.copy2(active_yolo_path, candidate_yolo_path)
     else:
+        ensure_existing_file(active_yolo_path, "Active or fallback YOLO training baseline")
         recreate_dir(yolo_project_dir / yolo_run_name)
         yolo_data_yaml = write_yolo_data_yaml(dataset_root)
         yolo_device = resolve_device(env_str("RETRAIN_YOLO_DEVICE", "auto"))
@@ -472,35 +512,42 @@ def main() -> None:
                 "YOLO_WORKERS": str(env_int("RETRAIN_YOLO_WORKERS", 0)),
             }
         )
-        run_command([sys.executable, "src/train_yolo.py"], env=yolo_env)
+        run_command([sys.executable, "src/train_yolo.py"], env=yolo_env, timeout_seconds=command_timeout_seconds)
 
         yolo_best_source = find_latest_best_pt(yolo_project_dir)
         shutil.copy2(yolo_best_source, candidate_yolo_path)
         yolo_map = read_yolo_map(yolo_best_source.parents[1])
 
+    unet_args = [
+        sys.executable,
+        "src/train_unet.py",
+        "--data-root",
+        str(dataset_root / "unet"),
+        "--epochs",
+        str(env_int("RETRAIN_UNET_EPOCHS", 1)),
+        "--batch",
+        str(env_int("RETRAIN_UNET_BATCH", 1)),
+        "--img-size",
+        str(int(active_base_metadata.get("active_unet_metadata", {}).get("img_size") or env_int("RETRAIN_UNET_IMGSZ", 256))),
+        "--workers",
+        str(env_int("RETRAIN_UNET_WORKERS", 0)),
+        "--encoder",
+        str(active_base_metadata.get("active_unet_metadata", {}).get("encoder") or env_str("RETRAIN_UNET_ENCODER", "resnet18")),
+        "--encoder-weights",
+        env_str("RETRAIN_UNET_ENCODER_WEIGHTS", "none"),
+        "--save-path",
+        str(candidate_unet_path),
+    ]
+    if active_unet_path.is_file():
+        unet_args.extend(["--init-checkpoint", str(active_unet_path)])
+    elif env_bool("RETRAIN_REQUIRE_ACTIVE_BASELINE", True):
+        raise RuntimeError(f"Active U-Net baseline is required but missing: {active_unet_path}")
+    else:
+        print("[UNET] No active U-Net checkpoint available; training candidate from configured encoder weights.", flush=True)
+
     unet_proc = run_command(
-        [
-            sys.executable,
-            "src/train_unet.py",
-            "--data-root",
-            str(dataset_root / "unet"),
-            "--epochs",
-            str(env_int("RETRAIN_UNET_EPOCHS", 1)),
-            "--batch",
-            str(env_int("RETRAIN_UNET_BATCH", 1)),
-            "--img-size",
-            str(int(active_base_metadata.get("active_unet_metadata", {}).get("img_size") or env_int("RETRAIN_UNET_IMGSZ", 256))),
-            "--workers",
-            str(env_int("RETRAIN_UNET_WORKERS", 0)),
-            "--encoder",
-            str(active_base_metadata.get("active_unet_metadata", {}).get("encoder") or env_str("RETRAIN_UNET_ENCODER", "resnet18")),
-            "--encoder-weights",
-            env_str("RETRAIN_UNET_ENCODER_WEIGHTS", "none"),
-            "--init-checkpoint",
-            str(active_unet_path),
-            "--save-path",
-            str(candidate_unet_path),
-        ]
+        unet_args,
+        timeout_seconds=command_timeout_seconds,
     )
     if not candidate_unet_path.is_file():
         raise RuntimeError(f"U-Net checkpoint was not produced at {candidate_unet_path}")
