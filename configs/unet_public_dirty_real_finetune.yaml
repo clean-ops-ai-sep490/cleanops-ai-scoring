@@ -1,0 +1,26 @@
+model:
+  architecture: unet
+  encoder: resnet34
+  encoder_weights: null
+  classes: 3
+  checkpoint_init: null
+
+data:
+  root: ./data/processed/unet_real
+  image_size: 384
+  augment: true
+
+training:
+  epochs: 20
+  batch_size: 2
+  optimizer: AdamW
+  learning_rate: 0.00002
+  loss: weighted_dice_cross_entropy
+  class_weights:
+    background: 0.2
+    dirty_area: 5.0
+    wet_surface: 2.0
+
+output:
+  dir: ./outputs/unet/runs
+  name: unet_resnet34_public_dirty_real_ft

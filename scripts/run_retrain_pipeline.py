@@ -518,28 +518,24 @@ def main() -> None:
         shutil.copy2(yolo_best_source, candidate_yolo_path)
         yolo_map = read_yolo_map(yolo_best_source.parents[1])
 
+    unet_config = env_str("RETRAIN_UNET_CONFIG", "configs/unet_real_finetune.yaml")
     unet_args = [
         sys.executable,
-        "src/train_unet.py",
-        "--data-root",
-        str(dataset_root / "unet"),
-        "--epochs",
-        str(env_int("RETRAIN_UNET_EPOCHS", 1)),
-        "--batch",
-        str(env_int("RETRAIN_UNET_BATCH", 1)),
-        "--img-size",
-        str(int(active_base_metadata.get("active_unet_metadata", {}).get("img_size") or env_int("RETRAIN_UNET_IMGSZ", 256))),
-        "--workers",
-        str(env_int("RETRAIN_UNET_WORKERS", 0)),
-        "--encoder",
-        str(active_base_metadata.get("active_unet_metadata", {}).get("encoder") or env_str("RETRAIN_UNET_ENCODER", "resnet18")),
-        "--encoder-weights",
-        env_str("RETRAIN_UNET_ENCODER_WEIGHTS", "none"),
-        "--save-path",
-        str(candidate_unet_path),
+        "scripts/train_unet.py",
+        "--config", unet_config,
+        "--data-root", str(dataset_root / "unet"),
+        "--valid-split", "valid",
+        "--save-path", str(candidate_unet_path),
+        "--num-workers", str(env_int("RETRAIN_UNET_WORKERS", 0)),
     ]
+    unet_epochs = env_int("RETRAIN_UNET_EPOCHS", 0)
+    if unet_epochs > 0:
+        unet_args.extend(["--epochs", str(unet_epochs)])
+    unet_batch = env_int("RETRAIN_UNET_BATCH", 0)
+    if unet_batch > 0:
+        unet_args.extend(["--batch", str(unet_batch)])
     if active_unet_path.is_file():
-        unet_args.extend(["--init-checkpoint", str(active_unet_path)])
+        unet_args.extend(["--checkpoint-init", str(active_unet_path)])
     elif env_bool("RETRAIN_REQUIRE_ACTIVE_BASELINE", True):
         raise RuntimeError(f"Active U-Net baseline is required but missing: {active_unet_path}")
     else:

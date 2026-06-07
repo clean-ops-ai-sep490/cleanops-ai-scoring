@@ -1,0 +1,11 @@
+{
+  "detection_classes": {
+    "0": "stain_object",
+    "1": "garbage_object"
+  },
+  "segmentation_classes": {
+    "0": "background",
+    "1": "dirty_area",
+    "2": "wet_surface"
+  }
+}

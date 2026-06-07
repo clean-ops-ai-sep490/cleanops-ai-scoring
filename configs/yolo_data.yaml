@@ -1,0 +1,7 @@
+path: ./data/processed/yolo
+train: images/train
+val: images/val
+
+names:
+  0: stain_object
+  1: garbage_object

@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import segmentation_models_pytorch as smp
 import torch
+import torch.nn as nn
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
@@ -135,6 +136,11 @@ def main():
     parser.add_argument("--encoder-weights", default="imagenet")
     parser.add_argument("--init-checkpoint", default="")
     parser.add_argument("--save-path", default=settings.unet_model_path)
+    parser.add_argument(
+        "--class-weights",
+        default="0.2,5.0,2.0",
+        help="Comma-separated weights for [background, stain_or_water, wet_surface]",
+    )
     args = parser.parse_args()
 
     data_root = Path(args.data_root)
@@ -186,11 +192,14 @@ def main():
         model.load_state_dict(state)
         print(f"Loaded U-Net init checkpoint: {init_path}")
 
+    raw_weights = [float(w) for w in args.class_weights.split(",")]
+    class_weight_tensor = torch.tensor(raw_weights, dtype=torch.float32).to(device)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     scaler = GradScaler(enabled=use_amp)
 
     dice_loss = smp.losses.DiceLoss(mode=smp.losses.MULTICLASS_MODE, from_logits=True)
-    focal_loss = smp.losses.FocalLoss(mode=smp.losses.MULTICLASS_MODE)
+    ce_loss = nn.CrossEntropyLoss(weight=class_weight_tensor)
 
     best_miou = -1.0
     save_path = Path(args.save_path)
@@ -208,7 +217,7 @@ def main():
             optimizer.zero_grad(set_to_none=True)
             with autocast(enabled=use_amp):
                 logits = model(images)
-                loss = 0.7 * dice_loss(logits, masks) + 0.3 * focal_loss(logits, masks)
+                loss = 0.6 * dice_loss(logits, masks) + 0.4 * ce_loss(logits, masks)
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
@@ -229,7 +238,7 @@ def main():
                 masks = masks.to(device, non_blocking=True)
 
                 logits = model(images)
-                loss = 0.7 * dice_loss(logits, masks) + 0.3 * focal_loss(logits, masks)
+                loss = 0.6 * dice_loss(logits, masks) + 0.4 * ce_loss(logits, masks)
                 val_loss += loss.item()
 
                 preds = torch.argmax(logits, dim=1)

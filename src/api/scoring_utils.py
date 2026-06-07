@@ -25,6 +25,8 @@ DEFAULT_SCORING_PENALTY_LABELS = (
     "cardboard",
     "bag",
     "trash_bag",
+    "stain_object",
+    "garbage_object",
 )
 
 DEFAULT_ROBOFLOW_DIRTY_LABELS = (
@@ -579,6 +581,7 @@ def merge_unet_and_sam3_masks(
         "floor_like_overmask_detected": floor_like_overmask_detected,
         **component_summary,
         "unet_stain_or_water_coverage_pct": round(unet_dirty_pct, 3),
+        "unet_dirty_area_coverage_pct": round(unet_dirty_pct, 3),
         "unet_wet_surface_coverage_pct": round(unet_wet_pct, 3),
         "merged_dirty_coverage_pct": round((merged_px / total_px) * 100.0, 3),
         "merged_stain_or_water_coverage_pct": round((dirty_px / total_px) * 100.0, 3),

@@ -1,0 +1,19 @@
+model:
+  architecture: unet
+  encoder: resnet34
+  encoder_weights: imagenet
+  classes: 3
+
+data:
+  root: ./data/processed/unet
+  image_size: 384
+
+training:
+  epochs: 30
+  batch_size: 4
+  optimizer: AdamW
+  learning_rate: 0.0003
+  loss: dice_cross_entropy
+
+output:
+  dir: ./outputs/unet

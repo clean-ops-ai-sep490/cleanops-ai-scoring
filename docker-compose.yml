@@ -29,7 +29,7 @@ services:
       - PENDING_LOWER_BOUND=50
       - YOLO_CONF=0.25
       - UNET_IMG_SIZE=384
-      - SCORING_PENALTY_LABELS=metal,paper,plastic,trash,marks,garbage,rubbish,litter,waste,debris,bottle,plastic_bottle,can,cup,cardboard,bag,trash_bag
+      - SCORING_PENALTY_LABELS=metal,paper,plastic,trash,marks,garbage,rubbish,litter,waste,debris,bottle,plastic_bottle,can,cup,cardboard,bag,trash_bag,stain_object,garbage_object
       - SCORING_OBJECT_PENALTY_PER_DETECTION=10
       - SCORING_CALIBRATION_ENABLED=true
       - SCORING_HIGH_RISK_REVIEW_ENVS=RESTROOM,HOSPITAL_OR
@@ -137,7 +137,7 @@ services:
       - MODEL_STORAGE_ACTIVE_PPE_KEY=${MODEL_STORAGE_ACTIVE_PPE_KEY:-ppe/active/model.pt}
       - MODEL_FORCE_REFRESH=${MODEL_FORCE_REFRESH:-false}
       - MODEL_REQUIRE_BLOB=${MODEL_REQUIRE_BLOB:-true}
-      - SCORING_PENALTY_LABELS=${SCORING_PENALTY_LABELS:-metal,paper,plastic,trash,marks,garbage,rubbish,litter,waste,debris,bottle,plastic_bottle,can,cup,cardboard,bag,trash_bag}
+      - SCORING_PENALTY_LABELS=${SCORING_PENALTY_LABELS:-metal,paper,plastic,trash,marks,garbage,rubbish,litter,waste,debris,bottle,plastic_bottle,can,cup,cardboard,bag,trash_bag,stain_object,garbage_object}
       - SCORING_OBJECT_PENALTY_PER_DETECTION=${SCORING_OBJECT_PENALTY_PER_DETECTION:-10}
       - SCORING_CALIBRATION_ENABLED=${SCORING_CALIBRATION_ENABLED:-true}
       - SCORING_HIGH_RISK_REVIEW_ENVS=${SCORING_HIGH_RISK_REVIEW_ENVS:-RESTROOM,HOSPITAL_OR}
