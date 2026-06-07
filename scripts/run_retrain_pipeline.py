@@ -179,6 +179,57 @@ def ensure_train_valid_splits(dataset_root: Path) -> None:
             raise RuntimeError("At least two exported samples are required to create train and valid splits.")
 
 
+def run_benchmark_eval(
+    weights_path: Path,
+    benchmark_dir: Path,
+    output_dir: Path,
+    timeout_seconds: int = 300,
+) -> dict[str, Any] | None:
+    """Run eval_benchmark.py as a subprocess; returns summary metrics or None on failure."""
+    cmd = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "eval_benchmark.py"),
+        "--benchmark", str(benchmark_dir),
+        "--weights", str(weights_path),
+        "--output", str(output_dir),
+        "--max-overlays", "0",
+    ]
+    print(f"[BENCHMARK] Running eval_benchmark on {weights_path.name}...", flush=True)
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        if proc.stdout:
+            print(proc.stdout, flush=True)
+        if proc.stderr:
+            print(proc.stderr, file=sys.stderr, flush=True)
+        if proc.returncode != 0:
+            print(f"[BENCHMARK] eval_benchmark.py exited {proc.returncode}; skipping benchmark gate.", flush=True)
+            return None
+        metrics_file = output_dir / "benchmark_metrics.json"
+        if not metrics_file.is_file():
+            print("[BENCHMARK] benchmark_metrics.json not found after eval; skipping.", flush=True)
+            return None
+        data = load_json(metrics_file)
+        summary = data.get("summary", {})
+        return {
+            "pixel_accuracy": summary.get("pixel_accuracy"),
+            "mean_iou": summary.get("mean_iou"),
+            "mean_dice_f1": summary.get("mean_dice_f1"),
+            "images_evaluated": data.get("images_evaluated", 0),
+        }
+    except subprocess.TimeoutExpired:
+        print(f"[BENCHMARK] Timed out after {timeout_seconds}s; skipping.", flush=True)
+        return None
+    except Exception as exc:
+        print(f"[BENCHMARK] Unexpected error: {exc}; skipping.", flush=True)
+        return None
+
+
 def write_yolo_data_yaml(dataset_root: Path) -> Path:
     yolo_root = dataset_root / "yolo"
     data_yaml = yolo_root / "data.yaml"
@@ -552,6 +603,48 @@ def main() -> None:
     if not candidate_yolo_path.is_file():
         raise RuntimeError(f"YOLO candidate was not produced at {candidate_yolo_path}")
 
+    # Run benchmark evaluation on candidate vs baseline U-Net
+    benchmark_result: dict[str, Any] = {"evaluated": False, "reason": "skipped"}
+    skip_benchmark = env_bool("RETRAIN_SKIP_BENCHMARK_EVAL", False)
+    if not skip_benchmark:
+        benchmark_dir = resolve_path(env_str("RETRAIN_BENCHMARK_DIR", "data/processed/benchmark"))
+        benchmark_timeout = max(60, env_int("RETRAIN_BENCHMARK_TIMEOUT_SEC", 300))
+        benchmark_images_dir = benchmark_dir / "images"
+        if benchmark_dir.is_dir() and benchmark_images_dir.is_dir() and list_images(benchmark_images_dir):
+            candidate_bm = run_benchmark_eval(
+                candidate_unet_path,
+                benchmark_dir,
+                resolve_path("outputs/retrain/benchmark/candidate"),
+                benchmark_timeout,
+            )
+            baseline_bm: dict[str, Any] | None = None
+            if active_unet_path.is_file():
+                baseline_bm = run_benchmark_eval(
+                    active_unet_path,
+                    benchmark_dir,
+                    resolve_path("outputs/retrain/benchmark/baseline"),
+                    benchmark_timeout,
+                )
+            if candidate_bm is not None:
+                benchmark_result = {
+                    "evaluated": True,
+                    "candidate": candidate_bm,
+                    "baseline": baseline_bm,
+                }
+                c_miou = candidate_bm.get("mean_iou")
+                b_miou = baseline_bm.get("mean_iou") if baseline_bm else None
+                improvement = round(c_miou - b_miou, 6) if c_miou is not None and b_miou is not None else None
+                print(
+                    f"[BENCHMARK] candidate mIoU={c_miou:.4f}"
+                    + (f", baseline mIoU={b_miou:.4f}, delta={improvement:+.4f}" if b_miou is not None else ", baseline=N/A"),
+                    flush=True,
+                )
+            else:
+                benchmark_result = {"evaluated": False, "reason": "evaluation_failed"}
+        else:
+            print(f"[BENCHMARK] No benchmark data at {benchmark_dir}; skipping.", flush=True)
+            benchmark_result = {"evaluated": False, "reason": "no_benchmark_data"}
+
     generated_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     _, uploaded_keys = candidate_artifact_keys(generated_at_utc)
     metrics = {
@@ -575,6 +668,7 @@ def main() -> None:
         "unet": {
             "miou": unet_miou,
         },
+        "benchmark": benchmark_result,
     }
     metrics["candidateArtifacts"] = uploaded_keys
     write_json(candidate_metrics_path, metrics)
