@@ -35,6 +35,16 @@ def env_int(name: str, default: int) -> int:
         raise ValueError(f"{name} must be an integer, got {value!r}") from exc
 
 
+def env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number, got {value!r}") from exc
+
+
 def env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -592,8 +602,19 @@ def main() -> None:
     else:
         print("[UNET] No active U-Net checkpoint available; training candidate from configured encoder weights.", flush=True)
 
+    unet_env = os.environ.copy()
+    unet_env.setdefault("OMP_NUM_THREADS", env_str("RETRAIN_UNET_OMP_NUM_THREADS", "1"))
+    unet_env.setdefault("MKL_NUM_THREADS", env_str("RETRAIN_UNET_MKL_NUM_THREADS", "1"))
+    unet_env.setdefault("KMP_DUPLICATE_LIB_OK", env_str("RETRAIN_UNET_KMP_DUPLICATE_LIB_OK", "TRUE"))
+    print(
+        "[UNET] thread_env "
+        f"OMP_NUM_THREADS={unet_env.get('OMP_NUM_THREADS')} "
+        f"MKL_NUM_THREADS={unet_env.get('MKL_NUM_THREADS')}",
+        flush=True,
+    )
     unet_proc = run_command(
         unet_args,
+        env=unet_env,
         timeout_seconds=command_timeout_seconds,
     )
     if not candidate_unet_path.is_file():
@@ -634,11 +655,29 @@ def main() -> None:
                 c_miou = candidate_bm.get("mean_iou")
                 b_miou = baseline_bm.get("mean_iou") if baseline_bm else None
                 improvement = round(c_miou - b_miou, 6) if c_miou is not None and b_miou is not None else None
+                min_improvement = env_float("RETRAIN_MIN_BENCHMARK_MIOU_IMPROVEMENT", 0.005)
+                benchmark_gate = None
+                if c_miou is not None and b_miou is not None:
+                    required_miou = b_miou + min_improvement
+                    passed = c_miou >= required_miou
+                    benchmark_gate = {
+                        "minimum_improvement": min_improvement,
+                        "required_mean_iou": round(required_miou, 6),
+                        "passed": passed,
+                    }
+                    benchmark_result["gate"] = benchmark_gate
                 print(
                     f"[BENCHMARK] candidate mIoU={c_miou:.4f}"
                     + (f", baseline mIoU={b_miou:.4f}, delta={improvement:+.4f}" if b_miou is not None else ", baseline=N/A"),
                     flush=True,
                 )
+                if benchmark_gate is not None:
+                    print(
+                        "[BENCHMARK_GATE] "
+                        f"candidate={c_miou:.4f}, required={benchmark_gate['required_mean_iou']:.4f}, "
+                        f"minimum_improvement={min_improvement:.4f}, passed={str(benchmark_gate['passed']).lower()}",
+                        flush=True,
+                    )
             else:
                 benchmark_result = {"evaluated": False, "reason": "evaluation_failed"}
         else:

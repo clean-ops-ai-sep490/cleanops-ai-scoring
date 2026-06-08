@@ -9,6 +9,14 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+try:
+    from dotenv import dotenv_values as _dotenv_values
+    _root = Path(__file__).resolve().parents[1]
+    _ENV_FILE = _root / ".env.trainer.local" if (_root / ".env.trainer.local").exists() else _root / ".env"
+    _DOTENV: dict = {k: v for k, v in _dotenv_values(_ENV_FILE).items() if v is not None} if _ENV_FILE.exists() else {}
+except ImportError:
+    _DOTENV = {}
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,15 +43,25 @@ def _truncate(text: str, max_length: int = 2000) -> str:
     return text[:max_length]
 
 
+def _tail(text: str, max_length: int = 20000) -> str:
+    """Keep the last N characters — epoch progress and metrics are at the end."""
+    if len(text) <= max_length:
+        return text
+    return "...[truncated]\n" + text[-max_length:]
+
+
+def _env(name: str, default: str = "") -> str:
+    return (os.getenv(name) or _DOTENV.get(name) or default).strip()
+
+
 TRAINER_API_ENABLED = _as_bool("TRAINER_API_ENABLED", True)
-TRAINER_API_KEY = os.getenv("TRAINER_API_KEY", "").strip()
+TRAINER_API_KEY = _env("TRAINER_API_KEY")
 TRAINER_COMMAND = (
-    os.getenv("TRAINER_COMMAND")
-    or os.getenv("SCORING_TRAIN_COMMAND")
-    or ""
-).strip()
+    _env("TRAINER_COMMAND")
+    or _env("SCORING_TRAIN_COMMAND")
+)
 TRAINER_TIMEOUT_SEC = max(30, _as_int("TRAINER_TIMEOUT_SEC", 7200))
-TRAINER_WORKDIR = os.getenv("TRAINER_WORKDIR", "/app").strip() or "/app"
+TRAINER_WORKDIR = _env("TRAINER_WORKDIR") or "/app"
 
 
 class TrainerSample(BaseModel):
@@ -117,7 +135,7 @@ def run_trainer_job(
         )
 
     logger.info("Trainer job started. job_id=%s batch_id=%s", payload.jobId, payload.batchId)
-    command_env = os.environ.copy()
+    command_env = {**_DOTENV, **os.environ}
     command_env.update(
         {
             "TRAINER_JOB_ID": payload.jobId,
@@ -157,7 +175,10 @@ def run_trainer_job(
     if proc.returncode != 0:
         stderr = _truncate((proc.stderr or "").strip())
         stdout = _truncate((proc.stdout or "").strip())
-        logger.error("Trainer job failed. job_id=%s exit_code=%s", payload.jobId, proc.returncode)
+        logger.error(
+            "Trainer job failed. job_id=%s exit_code=%s\nSTDOUT:\n%s\nSTDERR:\n%s",
+            payload.jobId, proc.returncode, stdout or "(empty)", stderr or "(empty)",
+        )
         return TrainerJobResponse(
             jobId=payload.jobId,
             status="failed",
@@ -173,6 +194,6 @@ def run_trainer_job(
         status="completed",
         exitCode=0,
         message="Trainer command completed successfully.",
-        stdoutTail=_truncate((proc.stdout or "").strip()) or None,
-        stderrTail=_truncate((proc.stderr or "").strip()) or None,
+        stdoutTail=_tail((proc.stdout or "").strip()) or None,
+        stderrTail=_truncate((proc.stderr or "").strip(), 3000) or None,
     )
